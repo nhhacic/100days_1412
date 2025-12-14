@@ -6,6 +6,7 @@ import {
 } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import challengeConfig from '../services/challengeConfig';
+import { RoleManager, ROLES } from '../services/roleManager';
 import { 
   Shield, Users, CheckCircle, XCircle, Clock, AlertCircle,
   Filter, Search, RefreshCw, Eye, Download, DollarSign,
@@ -36,6 +37,7 @@ function AdminDashboard() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [showDepositImages, setShowDepositImages] = useState({});
   const [selectedUsers, setSelectedUsers] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
   const itemsPerPage = 15;
 
   useEffect(() => {
@@ -97,6 +99,17 @@ function AdminDashboard() {
         totalDeposit,
         totalPenalty
       });
+
+      // Load current user info for role checking
+      if (auth.currentUser) {
+        const currentUserDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+        if (currentUserDoc.exists()) {
+          setCurrentUser({
+            id: currentUserDoc.id,
+            ...currentUserDoc.data()
+          });
+        }
+      }
 
     } catch (error) {
       console.error('Error loading users:', error);
@@ -225,6 +238,31 @@ function AdminDashboard() {
     } catch (error) {
       console.error('Error rejecting user:', error);
       alert('❌ Lỗi khi từ chối người dùng');
+    }
+  };
+
+  const updateUserRole = async (userId, newRole) => {
+    if (!currentUser || currentUser.role !== 'super_admin') {
+      alert('❌ Chỉ Super Admin mới có quyền phân quyền!');
+      return;
+    }
+
+    if (!window.confirm(`Xác nhận thay đổi role thành ${RoleManager.getRoleDisplayName(newRole)}?`)) return;
+
+    try {
+      await updateDoc(doc(db, 'users', userId), {
+        role: newRole,
+        roleUpdatedBy: auth.currentUser?.email || 'super_admin',
+        roleUpdatedAt: new Date(),
+        roleUpdatedByUID: auth.currentUser?.uid
+      });
+
+      alert('✅ Đã cập nhật role thành công!');
+      loadUsers();
+      setSelectedUser(null);
+    } catch (error) {
+      console.error('Error updating user role:', error);
+      alert('❌ Lỗi khi cập nhật role');
     }
   };
 
@@ -796,6 +834,42 @@ function AdminDashboard() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Role Management - Only for Super Admin */}
+                  {currentUser && currentUser.role === 'super_admin' && (
+                    <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                      <h3 className="font-bold text-purple-800 mb-3 flex items-center">
+                        <Shield className="w-5 h-5 mr-2" />
+                        Quản lý phân quyền
+                      </h3>
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-purple-700">Role hiện tại:</span>
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${RoleManager.getRoleBadgeClass(selectedUser.role)}`}>
+                            {RoleManager.getRoleDisplayName(selectedUser.role)}
+                          </span>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-purple-700 mb-2">
+                            Thay đổi role:
+                          </label>
+                          <select
+                            value={selectedUser.role || 'user'}
+                            onChange={(e) => updateUserRole(selectedUser.id, e.target.value)}
+                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 bg-white"
+                          >
+                            <option value="user">{RoleManager.getRoleDisplayName('user')}</option>
+                            <option value="moderator">{RoleManager.getRoleDisplayName('moderator')}</option>
+                            <option value="admin">{RoleManager.getRoleDisplayName('admin')}</option>
+                            <option value="super_admin">{RoleManager.getRoleDisplayName('super_admin')}</option>
+                          </select>
+                        </div>
+                        <div className="text-xs text-purple-600 bg-purple-100 p-2 rounded">
+                          ⚠️ Chỉ Super Admin mới có thể thay đổi role của người khác
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="bg-gray-50 p-4 rounded-lg">
                     <h3 className="font-bold text-gray-700 mb-3 flex items-center">

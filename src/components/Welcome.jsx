@@ -74,7 +74,7 @@ function Welcome() {
       <div className="bg-gradient-to-r from-blue-600 to-green-500 text-white py-8 px-4 text-center">
         <div className="max-w-6xl mx-auto">
           {/* Logo Container - THAY ĐỔI Ở ĐÂY */}
-          <div className="inline-flex items-center justify-center w-24 h-24 bg-white/20 rounded-full mb-4 p-2">
+          <div className="inline-flex items-center justify-center w-24 h-24 bg-white rounded-full mb-4 p-2">
             {/* CÁCH 1: Dùng logo từ public/ folder */}
             {/* Đặt file logo.png, logo.svg, hoặc logo.jpg vào thư mục public/ */}
             <img 

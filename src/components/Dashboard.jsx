@@ -24,6 +24,8 @@ function Dashboard({ user }) {
   const [activities, setActivities] = useState([]);
   // State cho accordion tháng
   const [openMonth, setOpenMonth] = useState(null);
+  // State cho auto-refresh
+  const [lastRefresh, setLastRefresh] = useState(new Date());
 
   useEffect(() => {
     const loadUserData = async () => {
@@ -35,7 +37,7 @@ function Dashboard({ user }) {
           const data = userDoc.data();
           setUserData(data);
           
-          const isUserAdmin = data.role === 'admin' || data.email === 'admin@example.com' || data.email === 'admin@challenge.com';
+          const isUserAdmin = data.role === 'admin' || data.role === 'super_admin' || data.email === 'admin@example.com' || data.email === 'admin@challenge.com' || data.email === 'superadmin@challenge.com';
           setIsAdmin(isUserAdmin);
           
           if (data.status === 'approved' && data.isActive) {
@@ -61,29 +63,45 @@ function Dashboard({ user }) {
     loadUserData();
     syncStravaTokens();
     setConfig(challengeConfig.getConfig());
-  }, [user]);
+
+    // Auto-refresh mỗi 5 phút
+    const autoRefreshInterval = setInterval(() => {
+      if (user && stravaConnected) {
+        loadActivities();
+        setLastRefresh(new Date());
+      }
+    }, 5 * 60 * 1000); // 5 phút
+
+    return () => clearInterval(autoRefreshInterval);
+  }, [user, stravaConnected]);
 
 
   // Ưu tiên lấy activities từ Firestore, chỉ gọi Strava nếu chưa có
-  const loadActivities = async () => {
+  const loadActivities = async (showAlert = false) => {
     if (!user) return;
-    // Lấy từ Firestore trước
-    const cached = await stravaService.getActivitiesFromFirebase(user.uid);
-    if (cached && cached.length > 0) {
-      setActivities(cached);
-      return;
-    }
-    // Nếu chưa có, lấy từ Strava và lưu lại
-    if (stravaService.isAuthenticated()) {
-      try {
+    try {
+      // Lấy từ Firestore trước
+      const cached = await stravaService.getActivitiesFromFirebase(user.uid);
+      if (cached && cached.length > 0) {
+        const previousCount = activities.length;
+        setActivities(cached);
+        
+        // Thông báo nếu có activity mới
+        if (showAlert && cached.length > previousCount) {
+          alert(`🎉 Có ${cached.length - previousCount} hoạt động mới từ Strava!`);
+        }
+        return;
+      }
+      // Nếu chưa có, lấy từ Strava và lưu lại
+      if (stravaService.isAuthenticated()) {
         const stravaActivities = await stravaService.getActivities();
         setActivities(stravaActivities || []);
         if (stravaActivities && stravaActivities.length > 0) {
           await stravaService.saveActivitiesToFirebase(user.uid, stravaActivities);
         }
-      } catch (error) {
-        console.error('Error loading Strava activities:', error);
       }
+    } catch (error) {
+      console.error('Error loading activities:', error);
     }
   };
 
@@ -438,13 +456,18 @@ function Dashboard({ user }) {
         <div className="bg-white rounded-xl shadow p-6 mb-6">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-xl font-bold text-gray-900">📝 Hoạt động gần đây</h3>
-            <button
-              onClick={syncActivities}
-              className="flex items-center text-blue-600 hover:text-blue-800"
-            >
-              <RefreshCw className="w-4 h-4 mr-1" />
-              Làm mới
-            </button>
+            <div className="flex items-center space-x-4">
+              <span className="text-sm text-gray-500">
+                Cập nhật: {lastRefresh.toLocaleTimeString('vi-VN')}
+              </span>
+              <button
+                onClick={() => loadActivities(true)}
+                className="flex items-center text-blue-600 hover:text-blue-800"
+              >
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Làm mới
+              </button>
+            </div>
           </div>
           
           {activities.length > 0 ? (
