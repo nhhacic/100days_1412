@@ -50,11 +50,24 @@ function Dashboard({ user }) {
     setConfig(challengeConfig.getConfig());
   }, [user]);
 
+
+  // Ưu tiên lấy activities từ Firestore, chỉ gọi Strava nếu chưa có
   const loadActivities = async () => {
+    if (!user) return;
+    // Lấy từ Firestore trước
+    const cached = await stravaService.getActivitiesFromFirebase(user.uid);
+    if (cached && cached.length > 0) {
+      setActivities(cached);
+      return;
+    }
+    // Nếu chưa có, lấy từ Strava và lưu lại
     if (stravaService.isAuthenticated()) {
       try {
         const stravaActivities = await stravaService.getActivities();
         setActivities(stravaActivities || []);
+        if (stravaActivities && stravaActivities.length > 0) {
+          await stravaService.saveActivitiesToFirebase(user.uid, stravaActivities);
+        }
       } catch (error) {
         console.error('Error loading Strava activities:', error);
       }
@@ -65,15 +78,20 @@ function Dashboard({ user }) {
     stravaService.redirectToStravaAuth();
   };
 
+
+  // Bắt buộc lấy mới từ Strava và lưu lại
   const syncActivities = async () => {
     if (!stravaService.isAuthenticated()) {
       alert('Vui lòng kết nối Strava trước!');
       return;
     }
-    
     setLoading(true);
     try {
-      await loadActivities();
+      const stravaActivities = await stravaService.getActivities();
+      setActivities(stravaActivities || []);
+      if (stravaActivities && stravaActivities.length > 0) {
+        await stravaService.saveActivitiesToFirebase(user.uid, stravaActivities);
+      }
       alert('✅ Đã đồng bộ dữ liệu từ Strava!');
     } catch (error) {
       alert('❌ Lỗi khi đồng bộ dữ liệu');
@@ -423,7 +441,7 @@ function Dashboard({ user }) {
           
           {activities.length > 0 ? (
             <div className="space-y-4">
-              {activities.slice(0, 5).map((activity, index) => (
+              {activities.map((activity, index) => (
                 <div key={activity.id || index} className="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center mr-4 ${
                     activity.type?.toLowerCase().includes('run') ? 'bg-blue-100' : 'bg-teal-100'

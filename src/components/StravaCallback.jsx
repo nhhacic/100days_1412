@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import stravaService from '../services/stravaService';
+import { auth } from '../services/firebase';
 
 function StravaCallback() {
   const navigate = useNavigate();
@@ -27,7 +28,19 @@ function StravaCallback() {
       if (code) {
         try {
           console.log('Processing Strava callback with code:', code);
-          await stravaService.handleCallback(code);
+          const tokenData = await stravaService.handleCallback(code);
+          // Lưu token lên Firebase nếu có user đăng nhập
+          const user = auth.currentUser;
+          console.log('Current user:', user);
+          console.log('Token data:', tokenData);
+          if (user && tokenData) {
+            if (typeof stravaService.saveTokensToFirebase === 'function') {
+              await stravaService.saveTokensToFirebase(user.uid, tokenData);
+            } else {
+              // Nếu chưa có hàm này, cần bổ sung vào stravaService.js
+              console.warn('Chưa có hàm saveTokensToFirebase trong stravaService');
+            }
+          }
           // Redirect sẽ xảy ra trong stravaService
         } catch (err) {
           console.error('Error processing Strava callback:', err);

@@ -1,9 +1,14 @@
+import { arrayUnion } from 'firebase/firestore';
+import { db } from './firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import axios from 'axios';
 
 // Strava Configuration từ environment variables
 const STRAVA_CLIENT_ID = import.meta.env.VITE_STRAVA_CLIENT_ID;
 const STRAVA_CLIENT_SECRET = import.meta.env.VITE_STRAVA_CLIENT_SECRET;
 const REDIRECT_URI = window.location.origin + window.location.pathname + '#/auth/callback';
+//const REDIRECT_URI = "https://didactic-disco-vgww64995vq3wp4q-5173.app.github.dev/strava-callback";
+console.log('Strava Redirect URI:', REDIRECT_URI);
 
 // Validate
 if (!STRAVA_CLIENT_ID || !STRAVA_CLIENT_SECRET) {
@@ -11,6 +16,45 @@ if (!STRAVA_CLIENT_ID || !STRAVA_CLIENT_SECRET) {
 }
 
 class StravaService {
+      // Lưu activities lên Firestore cho user
+      async saveActivitiesToFirebase(userId, activities) {
+        try {
+          await setDoc(doc(db, 'users', userId), {
+            strava_activities: activities
+          }, { merge: true });
+          console.log('Đã lưu activities Strava lên Firestore cho user:', userId);
+        } catch (err) {
+          console.error('Lỗi khi lưu activities Strava lên Firestore:', err);
+        }
+      }
+
+      // Lấy activities từ Firestore cho user
+      async getActivitiesFromFirebase(userId) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', userId));
+          if (userDoc.exists()) {
+            return userDoc.data().strava_activities || [];
+          }
+          return [];
+        } catch (err) {
+          console.error('Lỗi khi lấy activities Strava từ Firestore:', err);
+          return [];
+        }
+      }
+    // Lưu token lên Firestore cho user
+    async saveTokensToFirebase(userId, data) {
+      try {
+        await setDoc(doc(db, 'users', userId), {
+          strava_access_token: data.access_token,
+          strava_refresh_token: data.refresh_token,
+          strava_expires_at: data.expires_at,
+          strava_athlete: data.athlete
+        }, { merge: true });
+        console.log('Đã lưu token Strava lên Firestore cho user:', userId);
+      } catch (err) {
+        console.error('Lỗi khi lưu token Strava lên Firestore:', err);
+      }
+    }
   constructor() {
     this.accessToken = localStorage.getItem('strava_access_token');
     this.refreshToken = localStorage.getItem('strava_refresh_token');
@@ -38,10 +82,11 @@ class StravaService {
 
       console.log('Token response received:', response.data);
       this.saveTokens(response.data);
+      return response.data;
       
       window.location.href = window.location.origin + window.location.pathname + '#/dashboard';
       
-      return response.data;
+      return response.data;r
     } catch (error) {
       console.error('Strava auth error:', error.response?.data || error.message);
       throw error;

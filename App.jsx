@@ -76,6 +76,7 @@ function App() {
           
           {/* Strava Callback */}
           <Route path="/auth/callback" element={<StravaCallback />} />
+          <Route path="/strava-callback" element={<StravaCallback />} />
         </Routes>
       </div>
     </Router>
