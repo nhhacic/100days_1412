@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { auth, db } from '../services/firebase';
+import { auth, db, presenceService } from '../services/firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import stravaService from '../services/stravaService';
 import challengeConfig from '../services/challengeConfig';
 import { 
   Activity, Timer, TrendingUp, Calendar, DollarSign,
   Target, BarChart3, LogOut, RefreshCw, User,
-  AlertCircle, Heart, Zap, Waves, Settings,
+  AlertCircle, Heart, Waves, Settings, Bike,
   Shield, Clock, CheckCircle, XCircle, Users,
-  FileText, Award, Flame, Home
+  FileText, Award, Flame, Home, ArrowUp, Footprints
 } from 'lucide-react';
 import logo from '/logo.png?url';
 
@@ -26,6 +26,8 @@ function Dashboard({ user }) {
   const [openMonth, setOpenMonth] = useState(null);
   // State cho auto-refresh
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  // State cho nút scroll to top
+  const [showScrollTop, setShowScrollTop] = useState(false);
 
   useEffect(() => {
     const loadUserData = async () => {
@@ -64,6 +66,12 @@ function Dashboard({ user }) {
     syncStravaTokens();
     setConfig(challengeConfig.getConfig());
 
+    // Bắt đầu theo dõi presence (online status)
+    let cleanupPresence = null;
+    if (user) {
+      cleanupPresence = presenceService.startTracking(user.uid);
+    }
+
     // Auto-refresh mỗi 5 phút
     const autoRefreshInterval = setInterval(() => {
       if (user && stravaConnected) {
@@ -72,7 +80,18 @@ function Dashboard({ user }) {
       }
     }, 5 * 60 * 1000); // 5 phút
 
-    return () => clearInterval(autoRefreshInterval);
+    // Scroll listener cho nút scroll to top
+    const handleScroll = () => {
+      setShowScrollTop(window.scrollY > 300);
+    };
+    window.addEventListener('scroll', handleScroll);
+
+    return () => {
+      clearInterval(autoRefreshInterval);
+      window.removeEventListener('scroll', handleScroll);
+      // Cleanup presence tracking
+      if (cleanupPresence) cleanupPresence();
+    };
   }, [user, stravaConnected]);
 
 
@@ -224,7 +243,7 @@ function Dashboard({ user }) {
               Về trang chủ
             </button>
             <button
-              onClick={() => auth.signOut()}
+              onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
               className="w-full bg-gray-200 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-300 transition"
             >
               Đăng xuất
@@ -278,49 +297,66 @@ function Dashboard({ user }) {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-gradient-to-r from-blue-600 to-green-500 text-white shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between">
+          {/* Row 1: Logo + Title + Season Badge */}
+          <div className="flex items-center justify-between mb-3">
             <div className="flex items-center">
-              <img src={logo} alt="logo" className="w-10 h-10 mr-3 rounded-lg bg-white object-contain" />
+              <img src={logo} alt="logo" className="w-12 h-12 mr-3 rounded-lg bg-white p-1 object-contain" />
               <div>
-                <h1 className="text-2xl md:text-3xl font-bold">
-                  Challenge Dashboard
-                </h1>
-                <p className="opacity-90 mt-1 text-sm">
-                  {config.seasonName} • {formatDate(config.startDate)} - {formatDate(config.seasonEndDate)}
+                <div className="flex items-center flex-wrap gap-2">
+                  <h1 className="text-xl md:text-2xl font-bold">Challenge 100 Ngày</h1>
+                  <span className="px-2 py-0.5 bg-yellow-400 text-yellow-900 text-xs font-bold rounded-full">
+                    MÙA {config.season}
+                  </span>
+                </div>
+                <p className="opacity-80 text-xs md:text-sm">
+                  {formatDate(config.startDate)} - {formatDate(config.seasonEndDate)}
                 </p>
               </div>
             </div>
             
-            <div className="flex items-center space-x-4 mt-4 md:mt-0">
+            {/* User info */}
+            <div className="flex items-center bg-white/20 px-3 py-1.5 rounded-full">
+              {userData?.strava_athlete?.profile || userData?.strava_athlete?.profile_medium ? (
+                <img
+                  src={userData.strava_athlete.profile_medium || userData.strava_athlete.profile}
+                  alt="avatar"
+                  className="w-7 h-7 rounded-full mr-2 border-2 border-white/50 object-cover"
+                />
+              ) : (
+                <User className="w-5 h-5 mr-2" />
+              )}
+              <span className="text-sm font-medium hidden sm:inline">{userData?.fullName || user?.email?.split('@')[0]}</span>
+            </div>
+          </div>
+          
+          {/* Row 2: Navigation buttons */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <a 
+                href="#/welcome" 
+                className="flex items-center bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-sm font-medium transition"
+              >
+                <Home className="w-4 h-4 mr-1" />
+                <span className="hidden sm:inline">Luật chơi</span>
+              </a>
               {isAdmin && (
                 <a 
                   href="#/admin-dashboard" 
-                  className="flex items-center bg-purple-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-purple-700 transition"
+                  className="flex items-center bg-purple-500 hover:bg-purple-600 px-3 py-1.5 rounded-lg text-sm font-medium transition"
                 >
                   <Shield className="w-4 h-4 mr-1" />
-                  Admin Dashboard
+                  <span className="hidden sm:inline">Admin</span>
                 </a>
               )}
-              <div className="flex items-center bg-white/20 px-3 py-1 rounded-full">
-                {userData?.strava_athlete?.profile || userData?.strava_athlete?.profile_medium ? (
-                  <img
-                    src={userData.strava_athlete.profile_medium || userData.strava_athlete.profile}
-                    alt="avatar"
-                    className="w-7 h-7 rounded-full mr-2 border border-gray-300 object-cover"
-                  />
-                ) : (
-                  <User className="w-4 h-4 mr-2" />
-                )}
-                <span className="text-sm">{userData?.fullName || user?.email?.split('@')[0]}</span>
-              </div>
-              <button
-                onClick={() => auth.signOut()}
-                className="flex items-center bg-white text-blue-600 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition shadow"
-              >
-                <LogOut className="w-4 h-4 mr-1" />
-                Đăng xuất
-              </button>
             </div>
+            
+            <button
+              onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
+              className="flex items-center bg-white/90 text-gray-700 hover:bg-white px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm"
+            >
+              <LogOut className="w-4 h-4 mr-1" />
+              <span className="hidden sm:inline">Đăng xuất</span>
+            </button>
           </div>
         </div>
       </header>
@@ -362,41 +398,64 @@ function Dashboard({ user }) {
           </div>
         </div>
 
-        {/* Stats Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-          <div className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-xl shadow p-6">
+        {/* Stats Overview - Gộp stat + progress bar cùng loại */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+          {/* Card Chạy bộ */}
+          <div className="bg-gradient-to-br from-blue-500 to-cyan-500 text-white rounded-xl shadow p-6">
             <div className="flex items-center mb-4">
-              <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-                <Zap className="w-6 h-6" />
+              <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4 text-2xl">
+                🏃
               </div>
               <div>
                 <div className="text-2xl font-bold">{metrics.runDistance.toFixed(1)} km</div>
                 <div className="text-sm opacity-90">Chạy bộ tháng này</div>
               </div>
             </div>
-            <div className="text-sm">
+            <div className="text-sm mb-3">
               Mục tiêu: {config.monthlyTargets[userData?.gender || 'male'].run}km
+            </div>
+            {/* Progress bar */}
+            <div className="bg-white/20 rounded-full h-3 overflow-hidden">
+              <div 
+                className="h-full bg-white" 
+                style={{ width: `${metrics.kpiProgress.run}%` }}
+              ></div>
+            </div>
+            <div className="flex justify-between text-xs mt-2 opacity-90">
+              <span>{metrics.kpiProgress.run.toFixed(1)}%</span>
+              <span>{metrics.runDistance.toFixed(1)} / {config.monthlyTargets[userData?.gender || 'male'].run} km</span>
             </div>
           </div>
 
-          <div className="bg-gradient-to-r from-teal-500 to-green-500 text-white rounded-xl shadow p-6">
+          {/* Card Bơi lội */}
+          <div className="bg-gradient-to-br from-teal-500 to-green-500 text-white rounded-xl shadow p-6">
             <div className="flex items-center mb-4">
-              <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-                <Waves className="w-6 h-6" />
+              <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4 text-2xl">
+                🏊
               </div>
               <div>
                 <div className="text-2xl font-bold">{metrics.swimDistance.toFixed(1)} km</div>
                 <div className="text-sm opacity-90">Bơi lội tháng này</div>
               </div>
             </div>
-            <div className="text-sm">
+            <div className="text-sm mb-3">
               Mục tiêu: {config.monthlyTargets[userData?.gender || 'male'].swim}km
+            </div>
+            {/* Progress bar */}
+            <div className="bg-white/20 rounded-full h-3 overflow-hidden">
+              <div 
+                className="h-full bg-white" 
+                style={{ width: `${metrics.kpiProgress.swim}%` }}
+              ></div>
+            </div>
+            <div className="flex justify-between text-xs mt-2 opacity-90">
+              <span>{metrics.kpiProgress.swim.toFixed(1)}%</span>
+              <span>{metrics.swimDistance.toFixed(1)} / {config.monthlyTargets[userData?.gender || 'male'].swim} km</span>
             </div>
           </div>
 
-
-
-          <div className="bg-gradient-to-r from-red-500 to-pink-500 text-white rounded-xl shadow p-6">
+          {/* Card Phạt */}
+          <div className="bg-gradient-to-br from-red-500 to-pink-500 text-white rounded-xl shadow p-6">
             <div className="flex items-center mb-4">
               <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4">
                 <DollarSign className="w-6 h-6" />
@@ -407,47 +466,9 @@ function Dashboard({ user }) {
               </div>
             </div>
             <div className="text-sm">
-              {metrics.runDeficit > 0 && `Chạy thiếu: ${metrics.runDeficit.toFixed(1)}km `}
-              {metrics.swimDeficit > 0 && `Bơi thiếu: ${metrics.swimDeficit.toFixed(1)}km`}
-            </div>
-          </div>
-        </div>
-
-        {/* Progress Bars */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-          <div className="bg-white rounded-xl shadow p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-gray-900">🏃‍♂️ Tiến độ chạy bộ</h3>
-              <span className="text-blue-600 font-bold">{metrics.kpiProgress.run.toFixed(1)}%</span>
-            </div>
-            <div className="h-4 bg-gray-200 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-gradient-to-r from-blue-500 to-cyan-500" 
-                style={{ width: `${metrics.kpiProgress.run}%` }}
-              ></div>
-            </div>
-            <div className="flex justify-between text-sm text-gray-600 mt-2">
-              <span>0 km</span>
-              <span>{metrics.runDistance.toFixed(1)} / {config.monthlyTargets[userData?.gender || 'male'].run} km</span>
-              <span>Mục tiêu</span>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl shadow p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-gray-900">🏊‍♂️ Tiến độ bơi lội</h3>
-              <span className="text-teal-600 font-bold">{metrics.kpiProgress.swim.toFixed(1)}%</span>
-            </div>
-            <div className="h-4 bg-gray-200 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-gradient-to-r from-teal-500 to-green-500" 
-                style={{ width: `${metrics.kpiProgress.swim}%` }}
-              ></div>
-            </div>
-            <div className="flex justify-between text-sm text-gray-600 mt-2">
-              <span>0 km</span>
-              <span>{metrics.swimDistance.toFixed(1)} / {config.monthlyTargets[userData?.gender || 'male'].swim} km</span>
-              <span>Mục tiêu</span>
+              {metrics.runDeficit > 0 && <div>🏃 Chạy thiếu: {metrics.runDeficit.toFixed(1)}km</div>}
+              {metrics.swimDeficit > 0 && <div>🏊 Bơi thiếu: {metrics.swimDeficit.toFixed(1)}km</div>}
+              {metrics.runDeficit === 0 && metrics.swimDeficit === 0 && <div>✅ Đạt KPI!</div>}
             </div>
           </div>
         </div>
@@ -500,20 +521,69 @@ function Dashboard({ user }) {
                   const penalty = challengeConfig.calculatePenalty(runDeficit, swimDeficit).total;
                   const isOpen = openMonth === monthKey;
                   return (
-                    <div key={monthKey} className="mb-8 border rounded-lg">
-                      <div className="flex items-center gap-4 mb-2 cursor-pointer select-none px-4 py-2 bg-gray-50 hover:bg-gray-100 rounded-t-lg" onClick={() => setOpenMonth(isOpen ? null : monthKey)}>
-                        <div className="font-bold text-lg text-blue-700 flex-1">
-                          {`Tháng ${month}/${year}`} ({monthActs.length} hoạt động)
-                        </div>
-                        <div className="flex gap-4 items-center">
-                          <div className="text-sm text-red-600 font-semibold bg-red-50 rounded px-2 py-1">
-                            Phạt: {challengeConfig.formatCurrency(penalty)}
+                    <div key={monthKey} className="mb-8 border rounded-lg overflow-hidden">
+                      <div 
+                        className="cursor-pointer select-none px-4 py-3 bg-gray-50 hover:bg-gray-100" 
+                        onClick={() => setOpenMonth(isOpen ? null : monthKey)}
+                      >
+                        {/* Header row */}
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="font-bold text-lg text-blue-700">
+                            {`Tháng ${month}/${year}`} 
+                            <span className="text-sm font-normal text-gray-500 ml-2">({monthActs.length} hoạt động)</span>
                           </div>
-                          <div className="text-sm text-gray-700">🏃‍♂️ <b>{run.toFixed(2)} km</b></div>
-                          <div className="text-sm text-gray-700">🏊‍♂️ <b>{swim.toFixed(2)} km</b></div>
-                          <span className="ml-2 text-gray-400">{isOpen ? '▲' : '▼'}</span>
+                          <div className="flex items-center gap-3">
+                            <div className="text-sm text-red-600 font-semibold bg-red-50 rounded px-2 py-1">
+                              Phạt: {challengeConfig.formatCurrency(penalty)}
+                            </div>
+                            <span className="text-gray-400 text-lg">{isOpen ? '▲' : '▼'}</span>
+                          </div>
+                        </div>
+                        
+                        {/* Progress bars */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {/* Run progress */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">🏃</span>
+                            <div className="flex-1">
+                              <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-600">Chạy bộ</span>
+                                <span className="font-medium">{run.toFixed(1)} / {target.run} km</span>
+                              </div>
+                              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                                <div 
+                                  className={`h-full rounded-full transition-all ${run >= target.run ? 'bg-green-500' : 'bg-blue-500'}`}
+                                  style={{ width: `${Math.min(100, (run / target.run) * 100)}%` }}
+                                ></div>
+                              </div>
+                            </div>
+                            <span className={`text-xs font-bold ${run >= target.run ? 'text-green-600' : 'text-gray-500'}`}>
+                              {((run / target.run) * 100).toFixed(0)}%
+                            </span>
+                          </div>
+                          
+                          {/* Swim progress */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">🏊</span>
+                            <div className="flex-1">
+                              <div className="flex justify-between text-xs mb-1">
+                                <span className="text-gray-600">Bơi lội</span>
+                                <span className="font-medium">{swim.toFixed(1)} / {target.swim} km</span>
+                              </div>
+                              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                                <div 
+                                  className={`h-full rounded-full transition-all ${swim >= target.swim ? 'bg-green-500' : 'bg-teal-500'}`}
+                                  style={{ width: `${Math.min(100, (swim / target.swim) * 100)}%` }}
+                                ></div>
+                              </div>
+                            </div>
+                            <span className={`text-xs font-bold ${swim >= target.swim ? 'text-green-600' : 'text-gray-500'}`}>
+                              {((swim / target.swim) * 100).toFixed(0)}%
+                            </span>
+                          </div>
                         </div>
                       </div>
+                      
                       {isOpen && (
                         <div className="space-y-4 px-2 pt-2 pb-4">
                           {monthActs.map((activity, idx) => {
@@ -640,6 +710,17 @@ function Dashboard({ user }) {
           </div>
         </div>
       </div>
+
+      {/* Scroll to top button */}
+      {showScrollTop && (
+        <button
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          className="fixed bottom-6 right-6 bg-blue-600 text-white p-3 rounded-full shadow-lg hover:bg-blue-700 transition z-50"
+          title="Lên đầu trang"
+        >
+          <ArrowUp className="w-6 h-6" />
+        </button>
+      )}
     </div>
   );
 }

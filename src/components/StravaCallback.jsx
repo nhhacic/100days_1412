@@ -9,14 +9,47 @@ function StravaCallback() {
   useEffect(() => {
     const handleCallback = async () => {
       console.log('StravaCallback: Handling callback...');
+      console.log('Full URL:', window.location.href);
       
-      // Lấy code từ URL hash
-      const hash = window.location.hash.substring(1);
-      const params = new URLSearchParams(hash);
-      const code = params.get('code');
-      const error = params.get('error');
+      // Kiểm tra code từ cả query string và hash
+      // Strava trả về: /auth/callback?code=xxx&scope=xxx
+      // Nhưng với HashRouter, URL có thể là: /#/auth/callback?code=xxx
+      
+      let code = null;
+      let error = null;
+      
+      // Cách 1: Kiểm tra query string trực tiếp (sau hash)
+      const hashParts = window.location.hash.split('?');
+      if (hashParts.length > 1) {
+        const hashParams = new URLSearchParams(hashParts[1]);
+        code = hashParams.get('code');
+        error = hashParams.get('error');
+        console.log('Found in hash query:', { code, error });
+      }
+      
+      // Cách 2: Kiểm tra query string của window.location
+      if (!code) {
+        const searchParams = new URLSearchParams(window.location.search);
+        code = searchParams.get('code');
+        error = searchParams.get('error');
+        console.log('Found in search params:', { code, error });
+      }
+      
+      // Cách 3: Parse toàn bộ URL để tìm code
+      if (!code) {
+        const fullUrl = window.location.href;
+        const codeMatch = fullUrl.match(/[?&]code=([^&]+)/);
+        if (codeMatch) {
+          code = codeMatch[1];
+          console.log('Found code via regex:', code);
+        }
+        const errorMatch = fullUrl.match(/[?&]error=([^&]+)/);
+        if (errorMatch) {
+          error = errorMatch[1];
+        }
+      }
 
-      console.log('Code:', code, 'Error:', error);
+      console.log('Final - Code:', code, 'Error:', error);
 
       if (error) {
         console.error('Strava auth error:', error);

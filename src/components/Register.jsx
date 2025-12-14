@@ -7,7 +7,7 @@ import { checkEmailExists } from '../services/emailChecker';
 import { 
   UserPlus, Mail, Lock, User, Calendar, 
   Activity, AlertCircle, ArrowLeft, CheckCircle,
-  CreditCard, Upload, Check, Loader2, Eye, EyeOff
+  CreditCard, Upload, Check, Loader2, Eye, EyeOff, Download
 } from 'lucide-react';
 
 function Register() {
@@ -605,6 +605,31 @@ function Register() {
                 • Nội dung: <em>Quyet tam phi [Tên bạn]</em><br/>
                 • Sau khi chuyển, upload ảnh chứng minh bên dưới
               </p>
+            </div>
+
+            {/* QR Code chuyển khoản */}
+            <div className="bg-white p-4 rounded-lg border border-gray-200">
+              <h4 className="font-bold text-gray-800 mb-3 text-center">📱 Quét mã QR để chuyển khoản</h4>
+              <div className="flex flex-col items-center">
+                <div className="bg-white p-2 rounded-lg shadow-md border">
+                  <img 
+                    src={`https://img.vietqr.io/image/BIDV-8856525377-compact2.png?amount=500000&addInfo=Quyet%20tam%20phi%20${encodeURIComponent(formData.fullName || 'Ten cua ban')}&accountName=QUY%20CHALLENGE%20100%20NGAY`}
+                    alt="QR Code chuyển khoản"
+                    className="w-48 h-48 object-contain"
+                  />
+                </div>
+                <p className="text-gray-600 text-sm mt-3 text-center">
+                  Quét mã bằng app ngân hàng để chuyển khoản tự động
+                </p>
+                <a
+                  href={`https://img.vietqr.io/image/BIDV-8856525377-compact2.png?amount=500000&addInfo=Quyet%20tam%20phi%20${encodeURIComponent(formData.fullName || 'Ten cua ban')}&accountName=QUY%20CHALLENGE%20100%20NGAY`}
+                  download={`QR_500000_${formData.fullName || 'deposit'}.png`}
+                  className="mt-3 flex items-center bg-green-100 text-green-700 px-4 py-2 rounded-lg hover:bg-green-200 transition text-sm font-medium"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Tải mã QR về điện thoại
+                </a>
+              </div>
             </div>
 
             <div>

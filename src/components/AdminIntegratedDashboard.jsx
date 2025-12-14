@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth } from '../services/firebase';
+import { db, auth, presenceService } from '../services/firebase';
 import { 
   collection, getDocs, query, where, orderBy, updateDoc, doc,
-  limit, startAfter, Timestamp
+  limit, startAfter, Timestamp, deleteDoc, getDoc
 } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import challengeConfig from '../services/challengeConfig';
 import stravaService from '../services/stravaService';
+import { RoleManager, ROLES } from '../services/roleManager';
 import { 
   Shield, Users, CheckCircle, XCircle, Clock, AlertCircle,
   Filter, Search, RefreshCw, Eye, Download, DollarSign,
   TrendingUp, TrendingDown, BarChart3, FileText, Settings,
   Home, LogOut, ChevronLeft, ChevronRight, User, Calendar,
-  Zap, Waves, Activity, Award, CreditCard, Image as ImageIcon,
+  Waves, Activity, Award, CreditCard, Image as ImageIcon,
   CheckSquare, Square, Mail, Target, LineChart, TrendingUp as TrendingUpIcon,
   Timer, Heart, Map, Flag, Star, Shield as ShieldIcon,
   ChevronDown, ChevronUp, BarChart, PieChart, Layers,
@@ -20,7 +21,8 @@ import {
   ActivitySquare, CalendarDays, TargetIcon, Trophy,
   FileBarChart, FileSpreadsheet, FileJson, FileText as FileTextIcon,
   Calculator, Percent, Hash, Thermometer, Gauge,
-  Battery, BatteryCharging, BatteryFull, BatteryLow
+  Battery, BatteryCharging, BatteryFull, BatteryLow,
+  Footprints, Bike
 } from 'lucide-react';
 
 function AdminIntegratedDashboard() {
@@ -28,12 +30,14 @@ function AdminIntegratedDashboard() {
   const [loading, setLoading] = useState(true);
   const [allUsers, setAllUsers] = useState([]);
   const [filteredUsers, setFilteredUsers] = useState([]);
+  const [presenceData, setPresenceData] = useState({}); // Lưu trạng thái online của users
   const [stats, setStats] = useState({
     total: 0,
     pending: 0,
     approved: 0,
     rejected: 0,
     active: 0,
+    online: 0, // Thêm số người online
     totalDeposit: 0,
     totalPenalty: 0,
     totalActivities: 0,
@@ -62,12 +66,46 @@ function AdminIntegratedDashboard() {
 
   useEffect(() => {
     loadUsers();
+    loadPresenceData();
     setConfig(challengeConfig.getConfig());
+    
+    // Refresh presence data mỗi 30 giây
+    const presenceInterval = setInterval(() => {
+      loadPresenceData();
+    }, 30000);
+    
+    return () => clearInterval(presenceInterval);
   }, []);
 
   useEffect(() => {
     applyFilters();
   }, [allUsers, filter, search]);
+
+  // Load trạng thái presence (online/offline) của tất cả users
+  const loadPresenceData = async () => {
+    try {
+      const presenceRef = collection(db, 'presence');
+      const presenceSnapshot = await getDocs(presenceRef);
+      
+      const presence = {};
+      let onlineCount = 0;
+      
+      presenceSnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        presence[docSnap.id] = data;
+        
+        // Đếm số người online
+        if (presenceService.isOnline(data)) {
+          onlineCount++;
+        }
+      });
+      
+      setPresenceData(presence);
+      setStats(prev => ({ ...prev, online: onlineCount }));
+    } catch (error) {
+      console.error('Error loading presence data:', error);
+    }
+  };
 
   const loadUsers = async () => {
     setLoading(true);
@@ -136,188 +174,196 @@ function AdminIntegratedDashboard() {
   };
 
   const calculateUserMetrics = async (user) => {
-    // Mock data - thực tế sẽ lấy từ Strava API
+    // Lấy activities THẬT từ Firestore (đã được sync từ Strava)
     const target = config.monthlyTargets[user.gender || 'male'];
     
-    // Tạo dữ liệu ngẫu nhiên cho demo
-    const runDistance = Math.random() * target.run * 1.2;
-    const swimDistance = Math.random() * target.swim * 1.2;
+    // Lấy activities từ user document trong Firestore
+    const userActivities = user.strava_activities || [];
+    
+    // Lọc activities trong tháng hiện tại
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    // Tính toán distance từ activities thật
+    let runDistance = 0;
+    let swimDistance = 0;
+    let totalDistance = 0;
+    let activityCount = 0;
+    
+    const thirtyDayActivities = [];
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    
+    userActivities.forEach(activity => {
+      const activityDate = new Date(activity.start_date);
+      const distanceKm = (activity.distance || 0) / 1000;
+      const type = (activity.type || activity.sport_type || '').toLowerCase();
+      
+      // Tính cho tháng hiện tại
+      if (activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear) {
+        if (type.includes('run') || type.includes('walk')) {
+          runDistance += distanceKm;
+        } else if (type.includes('swim')) {
+          swimDistance += distanceKm;
+        }
+        totalDistance += distanceKm;
+        activityCount++;
+      }
+      
+      // Lấy activities 30 ngày gần đây
+      if (activityDate >= thirtyDaysAgo) {
+        thirtyDayActivities.push({
+          ...activity,
+          distanceKm: distanceKm,
+          activityType: type.includes('run') || type.includes('walk') ? 'Run' : 
+                       type.includes('swim') ? 'Swim' : 
+                       type.includes('ride') || type.includes('bike') ? 'Ride' : 'Other'
+        });
+      }
+    });
+    
+    // Tính deficit và penalty
     const runDeficit = Math.max(0, target.run - runDistance);
     const swimDeficit = Math.max(0, target.swim - swimDistance);
     const penalty = challengeConfig.calculatePenalty(runDeficit, swimDeficit).total;
     
-    // Tạo dữ liệu tracklog cho 30 ngày
-    const thirtyDayActivities = generateMockActivities(30, user.gender);
-    const activityCount = thirtyDayActivities.length;
-    const totalDistance = thirtyDayActivities.reduce((sum, act) => sum + act.distance, 0);
+    // Tính progress
+    const runProgress = Math.min(100, (runDistance / target.run) * 100);
+    const swimProgress = Math.min(100, (swimDistance / target.swim) * 100);
     
-    // Tính toán monthly stats
-    const monthlyStats = calculateMonthlyStats(thirtyDayActivities);
+    // Tính streak (số ngày liên tiếp có hoạt động)
+    const streak = calculateStreak(userActivities);
+    
+    // Tính monthly stats từ activities thật
+    const monthlyStats = calculateMonthlyStatsFromReal(userActivities);
     
     return {
       runDistance: parseFloat(runDistance.toFixed(1)),
       swimDistance: parseFloat(swimDistance.toFixed(1)),
       totalDistance: parseFloat(totalDistance.toFixed(1)),
       activityCount,
-      runProgress: Math.min(100, (runDistance / target.run) * 100),
-      swimProgress: Math.min(100, (swimDistance / target.swim) * 100),
+      runProgress: parseFloat(runProgress.toFixed(1)),
+      swimProgress: parseFloat(swimProgress.toFixed(1)),
       penalty,
       runDeficit: parseFloat(runDeficit.toFixed(1)),
       swimDeficit: parseFloat(swimDeficit.toFixed(1)),
-      streak: Math.floor(Math.random() * 30),
+      streak,
       thirtyDayActivities,
       monthlyStats,
-      thirtyDayChart: generateThirtyDayChart(thirtyDayActivities)
+      thirtyDayChart: generateThirtyDayChartFromReal(thirtyDayActivities)
     };
   };
 
-  const generateMockActivities = (days, gender) => {
-    const activities = [];
-    const target = config.monthlyTargets[gender || 'male'];
-    const today = new Date();
+  // Tính streak từ activities thật
+  const calculateStreak = (activities) => {
+    if (!activities || activities.length === 0) return 0;
     
-    for (let i = 0; i < days; i++) {
-      const date = new Date(today);
-      date.setDate(date.getDate() - i);
+    // Sắp xếp theo ngày mới nhất
+    const sorted = [...activities].sort((a, b) => 
+      new Date(b.start_date) - new Date(a.start_date)
+    );
+    
+    let streak = 0;
+    let currentDate = new Date();
+    currentDate.setHours(0, 0, 0, 0);
+    
+    for (const activity of sorted) {
+      const activityDate = new Date(activity.start_date);
+      activityDate.setHours(0, 0, 0, 0);
       
-      // Random có hoạt động không (70% có)
-      if (Math.random() > 0.3) {
-        const isRun = Math.random() > 0.5;
-        const activityType = isRun ? 'Run' : 'Swim';
-        const maxDailyLimit = config.dailyLimits.weekday[isRun ? 'run' : 'swim'];
-        
-        // Random distance trong giới hạn
-        const distance = Math.random() * maxDailyLimit * 0.8;
-        
-        activities.push({
-          id: `activity_${i}`,
-          name: `${activityType} - ${date.toLocaleDateString('vi-VN')}`,
-          type: activityType,
-          sport_type: activityType,
-          start_date: date.toISOString(),
-          distance: distance * 1000, // convert to meters
-          moving_time: Math.floor(Math.random() * 7200) + 1800, // 30-120 minutes
-          elapsed_time: Math.floor(Math.random() * 7200) + 1800,
-          total_elevation_gain: isRun ? Math.floor(Math.random() * 300) : 0,
-          average_speed: isRun ? (Math.random() * 5 + 3) : (Math.random() * 2 + 1), // km/h
-          max_speed: isRun ? (Math.random() * 8 + 5) : (Math.random() * 3 + 1.5),
-          average_heartrate: Math.floor(Math.random() * 60) + 120, // 120-180 bpm
-          max_heartrate: Math.floor(Math.random() * 40) + 160, // 160-200 bpm
-          average_cadence: isRun ? Math.floor(Math.random() * 40) + 160 : null,
-          kilojoules: Math.floor(Math.random() * 2000) + 500,
-          calories: Math.floor(Math.random() * 1000) + 200,
-          perceived_exertion: Math.floor(Math.random() * 10) + 1,
-          flagged: Math.random() > 0.9, // 10% bị flag
-          isValid: Math.random() > 0.1, // 90% valid
-          countedDistance: calculateCountedDistance(distance, date, isRun ? 'run' : 'swim'),
-          quotaExceeded: distance > maxDailyLimit * 0.8,
-          dailyQuota: maxDailyLimit,
-          pace: calculatePace(distance, isRun ? 'run' : 'swim')
-        });
+      const diffDays = Math.floor((currentDate - activityDate) / (1000 * 60 * 60 * 24));
+      
+      if (diffDays <= 1) {
+        streak++;
+        currentDate = activityDate;
+      } else {
+        break;
       }
     }
     
-    return activities;
+    return streak;
   };
 
-  const calculateCountedDistance = (actualDistance, date, activityType) => {
-    const isWeekday = date.getDay() >= 1 && date.getDay() <= 5;
-    const dailyLimit = isWeekday ? 
-      config.dailyLimits.weekday[activityType] : 
-      config.dailyLimits.weekend[activityType];
-    
-    if (actualDistance > dailyLimit) {
-      return dailyLimit; // Chỉ tính đến giới hạn
-    }
-    return actualDistance;
-  };
-
-  const calculatePace = (distance, activityType) => {
-    // pace tính bằng phút/km
-    if (activityType === 'run') {
-      return parseFloat((Math.random() * 3 + 5).toFixed(1)); // 5-8 phút/km
-    } else {
-      return parseFloat((Math.random() * 5 + 20).toFixed(1)); // 20-25 phút/km (bơi)
-    }
-  };
-
-  const calculateMonthlyStats = (activities) => {
+  // Tính monthly stats từ activities thật
+  const calculateMonthlyStatsFromReal = (activities) => {
     const monthlyStats = {};
     
     activities.forEach(activity => {
       const date = new Date(activity.start_date);
-      const monthKey = `${date.getFullYear()}-${date.getMonth() + 1}`;
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
       
       if (!monthlyStats[monthKey]) {
         monthlyStats[monthKey] = {
           month: monthKey,
           runDistance: 0,
           swimDistance: 0,
+          rideDistance: 0,
           activityCount: 0,
           totalDistance: 0,
-          totalTime: 0,
-          averagePace: 0,
-          averageHeartRate: 0,
-          validActivities: 0,
-          flaggedActivities: 0,
-          quotaExceededDays: 0
+          totalTime: 0
         };
       }
       
       const stat = monthlyStats[monthKey];
-      const distanceKm = activity.distance / 1000;
+      const distanceKm = (activity.distance || 0) / 1000;
+      const type = (activity.type || activity.sport_type || '').toLowerCase();
       
-      if (activity.type === 'Run') {
+      if (type.includes('run') || type.includes('walk')) {
         stat.runDistance += distanceKm;
-      } else {
+      } else if (type.includes('swim')) {
         stat.swimDistance += distanceKm;
+      } else if (type.includes('ride') || type.includes('bike')) {
+        stat.rideDistance += distanceKm;
       }
       
       stat.activityCount++;
       stat.totalDistance += distanceKm;
-      stat.totalTime += activity.moving_time;
-      stat.averageHeartRate += activity.average_heartrate;
-      
-      if (activity.isValid) stat.validActivities++;
-      if (activity.flagged) stat.flaggedActivities++;
-      if (activity.quotaExceeded) stat.quotaExceededDays++;
+      stat.totalTime += (activity.moving_time || 0);
     });
     
-    // Tính trung bình
+    // Round numbers
     Object.values(monthlyStats).forEach(stat => {
-      stat.averageHeartRate = Math.round(stat.averageHeartRate / stat.activityCount);
-      stat.averagePace = parseFloat((stat.totalTime / 60 / stat.totalDistance).toFixed(1));
+      stat.runDistance = parseFloat(stat.runDistance.toFixed(1));
+      stat.swimDistance = parseFloat(stat.swimDistance.toFixed(1));
+      stat.rideDistance = parseFloat(stat.rideDistance.toFixed(1));
+      stat.totalDistance = parseFloat(stat.totalDistance.toFixed(1));
     });
     
-    return Object.values(monthlyStats);
+    return Object.values(monthlyStats).sort((a, b) => b.month.localeCompare(a.month));
   };
 
-  const generateThirtyDayChart = (activities) => {
+  // Generate chart data từ activities thật
+  const generateThirtyDayChartFromReal = (activities) => {
     const chartData = [];
     const today = new Date();
     
     for (let i = 29; i >= 0; i--) {
       const date = new Date(today);
       date.setDate(date.getDate() - i);
-      const dateStr = date.toISOString().split('T')[0];
+      date.setHours(0, 0, 0, 0);
       
-      const dayActivities = activities.filter(act => 
-        act.start_date.split('T')[0] === dateStr
-      );
+      const dayActivities = activities.filter(a => {
+        const actDate = new Date(a.start_date);
+        actDate.setHours(0, 0, 0, 0);
+        return actDate.getTime() === date.getTime();
+      });
       
-      const totalDistance = dayActivities.reduce((sum, act) => sum + (act.distance / 1000), 0);
+      let runKm = 0;
+      let swimKm = 0;
+      
+      dayActivities.forEach(a => {
+        const type = (a.type || a.sport_type || '').toLowerCase();
+        const km = (a.distance || 0) / 1000;
+        if (type.includes('run') || type.includes('walk')) runKm += km;
+        else if (type.includes('swim')) swimKm += km;
+      });
       
       chartData.push({
-        date: dateStr,
-        day: date.getDate(),
-        totalDistance: parseFloat(totalDistance.toFixed(1)),
-        activityCount: dayActivities.length,
-        hasActivity: dayActivities.length > 0,
-        isWeekend: date.getDay() === 0 || date.getDay() === 6,
-        pace: dayActivities.length > 0 ? 
-          parseFloat((dayActivities.reduce((sum, act) => sum + act.pace, 0) / dayActivities.length).toFixed(1)) : 0,
-        heartRate: dayActivities.length > 0 ? 
-          Math.round(dayActivities.reduce((sum, act) => sum + act.average_heartrate, 0) / dayActivities.length) : 0
+        date: date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }),
+        run: parseFloat(runKm.toFixed(1)),
+        swim: parseFloat(swimKm.toFixed(1)),
+        total: parseFloat((runKm + swimKm).toFixed(1))
       });
     }
     
@@ -589,7 +635,7 @@ function AdminIntegratedDashboard() {
                 Làm mới
               </button>
               <button
-                onClick={() => auth.signOut()}
+                onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
                 className="flex items-center bg-white text-purple-600 px-4 py-2 rounded-lg font-medium hover:bg-gray-100"
               >
                 <LogOut className="w-4 h-4 mr-1" />
@@ -650,6 +696,31 @@ function AdminIntegratedDashboard() {
                     <div className="text-gray-600 text-sm">Hoạt động</div>
                   </div>
                 </div>
+              </div>
+            </div>
+            
+            {/* Online Stats Bar */}
+            <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-4 mb-6 shadow">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center text-white">
+                  <div className="relative mr-3">
+                    <span className="relative flex h-4 w-4">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-white"></span>
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-2xl font-bold">{stats.online}</span>
+                    <span className="ml-2 text-white/90">người đang online</span>
+                  </div>
+                </div>
+                <button
+                  onClick={loadPresenceData}
+                  className="flex items-center bg-white/20 text-white px-3 py-1.5 rounded-lg hover:bg-white/30 text-sm"
+                >
+                  <RefreshCw className="w-4 h-4 mr-1" />
+                  Cập nhật
+                </button>
               </div>
             </div>
 
@@ -766,14 +837,17 @@ function AdminIntegratedDashboard() {
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Người dùng
                           </th>
+                          <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Online
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Phân quyền
+                          </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Trạng thái
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Kết quả
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Tracklog
                           </th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Phạt
@@ -807,6 +881,29 @@ function AdminIntegratedDashboard() {
                                 </div>
                               </div>
                             </td>
+                            <td className="px-3 py-4 text-center">
+                              {presenceService.isOnline(presenceData[user.id]) ? (
+                                <div className="flex flex-col items-center">
+                                  <span className="relative flex h-3 w-3">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                                  </span>
+                                  <span className="text-xs text-green-600 mt-1">Online</span>
+                                </div>
+                              ) : (
+                                <div className="flex flex-col items-center">
+                                  <span className="inline-flex rounded-full h-3 w-3 bg-gray-300"></span>
+                                  <span className="text-xs text-gray-400 mt-1" title={presenceService.formatLastSeen(presenceData[user.id])}>
+                                    {presenceData[user.id] ? presenceService.formatLastSeen(presenceData[user.id]) : 'Offline'}
+                                  </span>
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={RoleManager.getRoleBadge(user.role || 'user').className}>
+                                {RoleManager.getRoleBadge(user.role || 'user').text}
+                              </span>
+                            </td>
                             <td className="px-6 py-4">
                               {getStatusBadge(user.status)}
                               <div className="mt-2">
@@ -825,7 +922,7 @@ function AdminIntegratedDashboard() {
                             <td className="px-6 py-4">
                               <div className="space-y-1">
                                 <div className="flex items-center">
-                                  <Zap className="w-3 h-3 text-blue-500 mr-1" />
+                                  <span className="mr-1">🏃</span>
                                   <span className="text-xs">{user.metrics.runDistance}km</span>
                                   <div className="ml-2 w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
                                     <div 
@@ -835,7 +932,7 @@ function AdminIntegratedDashboard() {
                                   </div>
                                 </div>
                                 <div className="flex items-center">
-                                  <Waves className="w-3 h-3 text-teal-500 mr-1" />
+                                  <span className="mr-1">🏊</span>
                                   <span className="text-xs">{user.metrics.swimDistance}km</span>
                                   <div className="ml-2 w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
                                     <div 
@@ -846,22 +943,6 @@ function AdminIntegratedDashboard() {
                                 </div>
                                 <div className="text-xs text-gray-500">
                                   {user.metrics.activityCount} hoạt động
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="space-y-1">
-                                <div className="text-xs">
-                                  <span className="text-gray-600">Tổng: </span>
-                                  <span className="font-medium">{user.metrics.totalDistance}km</span>
-                                </div>
-                                <div className="text-xs">
-                                  <span className="text-gray-600">30 ngày: </span>
-                                  <span className="font-medium">{user.metrics.thirtyDayChart?.filter(d => d.hasActivity).length || 0} ngày</span>
-                                </div>
-                                <div className="text-xs">
-                                  <span className="text-gray-600">Chuỗi: </span>
-                                  <span className="font-medium">{user.metrics.streak} ngày</span>
                                 </div>
                               </div>
                             </td>
@@ -1225,11 +1306,9 @@ function AdminIntegratedDashboard() {
                           <div className="flex items-start justify-between">
                             <div>
                               <div className="flex items-center">
-                                {activity.type === 'Run' ? (
-                                  <Zap className="w-4 h-4 text-blue-500 mr-2" />
-                                ) : (
-                                  <Waves className="w-4 h-4 text-teal-500 mr-2" />
-                                )}
+                                <span className="mr-2">
+                                  {activity.type === 'Run' ? '🏃' : activity.type === 'Ride' ? '🚴' : '🏊'}
+                                </span>
                                 <span className="font-medium">{activity.name}</span>
                                 <span className="ml-2">{getActivityValidityBadge(activity)}</span>
                               </div>

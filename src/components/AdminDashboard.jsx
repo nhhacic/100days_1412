@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db, auth } from '../services/firebase';
 import { 
   collection, getDocs, query, where, orderBy, updateDoc, doc,
-  limit, startAfter, getCountFromServer
+  limit, startAfter, getCountFromServer, deleteDoc, getDoc
 } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import challengeConfig from '../services/challengeConfig';
@@ -12,8 +12,9 @@ import {
   Filter, Search, RefreshCw, Eye, Download, DollarSign,
   TrendingUp, TrendingDown, BarChart3, FileText, Settings,
   Home, LogOut, ChevronLeft, ChevronRight, User, Calendar,
-  Zap, Waves, Activity, Award, CreditCard, Image as ImageIcon,
-  CheckSquare, Square, Mail, Phone, MapPin, Star, Flag
+  Waves, Activity, Award, CreditCard, Image as ImageIcon,
+  CheckSquare, Square, Mail, Phone, MapPin, Star, Flag,
+  Trash2, Key, UserCheck, UserX, MoreVertical, Footprints, Bike
 } from 'lucide-react';
 
 function AdminDashboard() {
@@ -42,11 +43,26 @@ function AdminDashboard() {
 
   useEffect(() => {
     loadUsers();
+    loadCurrentUser();
   }, []);
 
   useEffect(() => {
     applyFilters();
   }, [allUsers, filter, search]);
+
+  const loadCurrentUser = async () => {
+    try {
+      if (auth.currentUser) {
+        const userDocRef = doc(db, 'users', auth.currentUser.uid);
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+          setCurrentUser({ id: userDocSnap.id, ...userDocSnap.data() });
+        }
+      }
+    } catch (error) {
+      console.error('Error loading current user:', error);
+    }
+  };
 
   const loadUsers = async () => {
     setLoading(true);
@@ -266,6 +282,130 @@ function AdminDashboard() {
     }
   };
 
+  // Xóa người dùng (chỉ Super Admin)
+  const handleDeleteUser = async (userId, userEmail) => {
+    if (!currentUser || currentUser.role !== 'super_admin') {
+      alert('❌ Chỉ Super Admin mới có quyền xóa người dùng!');
+      return;
+    }
+
+    if (userId === auth.currentUser?.uid) {
+      alert('❌ Không thể xóa chính mình!');
+      return;
+    }
+
+    const confirmText = prompt(`Nhập "${userEmail}" để xác nhận xóa người dùng này:`);
+    if (confirmText !== userEmail) {
+      alert('❌ Email không khớp, hủy xóa!');
+      return;
+    }
+
+    try {
+      // Xóa document user trong Firestore
+      await deleteDoc(doc(db, 'users', userId));
+      
+      // Xóa activities của user (nếu có)
+      try {
+        const activitiesRef = collection(db, 'activities');
+        const q = query(activitiesRef, where('userId', '==', userId));
+        const snapshot = await getDocs(q);
+        const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+        await Promise.all(deletePromises);
+      } catch (e) {
+        console.log('No activities to delete or error:', e);
+      }
+
+      alert('✅ Đã xóa người dùng khỏi hệ thống!');
+      loadUsers();
+      setSelectedUser(null);
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      alert('❌ Lỗi khi xóa người dùng: ' + error.message);
+    }
+  };
+
+  // Thay đổi trạng thái duyệt (chỉ Super Admin)
+  const handleChangeUserStatus = async (userId, currentStatus) => {
+    if (!currentUser || currentUser.role !== 'super_admin') {
+      alert('❌ Chỉ Super Admin mới có quyền thay đổi trạng thái!');
+      return;
+    }
+
+    const statuses = [
+      { value: 'pending_approval', label: 'Chờ duyệt' },
+      { value: 'approved', label: 'Đã duyệt' },
+      { value: 'rejected', label: 'Từ chối' }
+    ];
+
+    const options = statuses.map((s, i) => `${i + 1}. ${s.label}${s.value === currentStatus ? ' (hiện tại)' : ''}`).join('\n');
+    const choice = prompt(`Chọn trạng thái mới:\n${options}\n\nNhập số (1-3):`);
+    
+    if (!choice || !['1', '2', '3'].includes(choice)) {
+      return;
+    }
+
+    const newStatus = statuses[parseInt(choice) - 1].value;
+    if (newStatus === currentStatus) {
+      alert('Trạng thái không thay đổi!');
+      return;
+    }
+
+    try {
+      const updateData = {
+        status: newStatus,
+        statusUpdatedBy: auth.currentUser?.email || 'super_admin',
+        statusUpdatedAt: new Date(),
+        statusUpdatedByUID: auth.currentUser?.uid
+      };
+
+      if (newStatus === 'approved') {
+        updateData.isActive = true;
+        updateData.approvedBy = auth.currentUser?.email;
+        updateData.approvedAt = new Date();
+      } else if (newStatus === 'rejected') {
+        updateData.isActive = false;
+      } else if (newStatus === 'pending_approval') {
+        updateData.isActive = false;
+      }
+
+      await updateDoc(doc(db, 'users', userId), updateData);
+
+      alert(`✅ Đã chuyển trạng thái thành "${statuses[parseInt(choice) - 1].label}"!`);
+      loadUsers();
+      setSelectedUser(null);
+    } catch (error) {
+      console.error('Error changing user status:', error);
+      alert('❌ Lỗi khi thay đổi trạng thái: ' + error.message);
+    }
+  };
+
+  // Reset mật khẩu người dùng (chỉ Super Admin)
+  const handleResetPassword = async (userEmail) => {
+    if (!currentUser || currentUser.role !== 'super_admin') {
+      alert('❌ Chỉ Super Admin mới có quyền reset mật khẩu!');
+      return;
+    }
+
+    if (!window.confirm(`Gửi email reset mật khẩu đến "${userEmail}"?`)) {
+      return;
+    }
+
+    try {
+      // Sử dụng Firebase Auth sendPasswordResetEmail
+      const { sendPasswordResetEmail } = await import('firebase/auth');
+      await sendPasswordResetEmail(auth, userEmail);
+      
+      alert(`✅ Đã gửi email reset mật khẩu đến ${userEmail}!\nNgười dùng sẽ nhận được email hướng dẫn đặt lại mật khẩu.`);
+    } catch (error) {
+      console.error('Error sending password reset:', error);
+      if (error.code === 'auth/user-not-found') {
+        alert('❌ Không tìm thấy tài khoản với email này!');
+      } else {
+        alert('❌ Lỗi khi gửi email reset mật khẩu: ' + error.message);
+      }
+    }
+  };
+
   const toggleSelectUser = (userId) => {
     setSelectedUsers(prev => 
       prev.includes(userId) 
@@ -374,7 +514,7 @@ function AdminDashboard() {
                 Làm mới
               </button>
               <button
-                onClick={() => auth.signOut()}
+                onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
                 className="flex items-center bg-white text-purple-600 px-4 py-2 rounded-lg font-medium hover:bg-gray-100"
               >
                 <LogOut className="w-4 h-4 mr-1" />
@@ -549,6 +689,9 @@ function AdminDashboard() {
                         Người dùng
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Phân quyền
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Trạng thái
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -559,9 +702,6 @@ function AdminDashboard() {
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Phạt
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Thao tác
                       </th>
                     </tr>
                   </thead>
@@ -595,6 +735,11 @@ function AdminDashboard() {
                           </div>
                         </td>
                         <td className="px-6 py-4">
+                          <span className={RoleManager.getRoleBadge(user.role || 'user').className}>
+                            {RoleManager.getRoleBadge(user.role || 'user').text}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
                           {getStatusBadge(user.status)}
                           {user.status === 'approved' && user.approvedAt && (
                             <div className="text-xs text-gray-500 mt-1">
@@ -605,7 +750,7 @@ function AdminDashboard() {
                         <td className="px-6 py-4">
                           <div className="space-y-1">
                             <div className="flex items-center">
-                              <Zap className="w-3 h-3 text-blue-500 mr-1" />
+                              <span className="mr-1">🏃</span>
                               <span className="text-xs">{user.metrics.runDistance}km</span>
                               <div className="ml-2 w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
                                 <div 
@@ -615,7 +760,7 @@ function AdminDashboard() {
                               </div>
                             </div>
                             <div className="flex items-center">
-                              <Waves className="w-3 h-3 text-teal-500 mr-1" />
+                              <span className="mr-1">🏊</span>
                               <span className="text-xs">{user.metrics.swimDistance}km</span>
                               <div className="ml-2 w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
                                 <div 
@@ -667,36 +812,6 @@ function AdminDashboard() {
                               <div className="text-xs text-gray-600">
                                 Thiếu bơi: {user.metrics.swimDeficit}km
                               </div>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex space-x-2">
-                            <button
-                              onClick={() => setSelectedUser(user)}
-                              className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm hover:bg-blue-200 flex items-center"
-                            >
-                              <Eye className="w-3 h-3 mr-1" />
-                              Chi tiết
-                            </button>
-                            
-                            {user.status === 'pending_approval' && (
-                              <>
-                                <button
-                                  onClick={() => handleApprove(user.id)}
-                                  className="px-3 py-1 bg-green-100 text-green-700 rounded-lg text-sm hover:bg-green-200 flex items-center"
-                                >
-                                  <CheckCircle className="w-3 h-3 mr-1" />
-                                  Duyệt
-                                </button>
-                                <button
-                                  onClick={() => handleReject(user.id)}
-                                  className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-sm hover:bg-red-200 flex items-center"
-                                >
-                                  <XCircle className="w-3 h-3 mr-1" />
-                                  Từ chối
-                                </button>
-                              </>
                             )}
                           </div>
                         </td>
@@ -845,8 +960,8 @@ function AdminDashboard() {
                       <div className="space-y-3">
                         <div className="flex justify-between items-center">
                           <span className="text-purple-700">Role hiện tại:</span>
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${RoleManager.getRoleBadgeClass(selectedUser.role)}`}>
-                            {RoleManager.getRoleDisplayName(selectedUser.role)}
+                          <span className={RoleManager.getRoleBadge(selectedUser.role || 'user').className}>
+                            {RoleManager.getRoleBadge(selectedUser.role || 'user').text}
                           </span>
                         </div>
                         <div>

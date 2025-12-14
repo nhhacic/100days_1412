@@ -82,11 +82,11 @@ class StravaService {
 
       console.log('Token response received:', response.data);
       this.saveTokens(response.data);
-      return response.data;
       
+      // Redirect to dashboard after successful auth
       window.location.href = window.location.origin + window.location.pathname + '#/dashboard';
       
-      return response.data;r
+      return response.data;
     } catch (error) {
       console.error('Strava auth error:', error.response?.data || error.message);
       throw error;

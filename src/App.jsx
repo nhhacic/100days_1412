@@ -42,8 +42,13 @@ function App() {
     <Router>
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-green-50">
         <Routes>
-          {/* Welcome/Rules Page - Accessible to everyone */}
-          <Route path="/" element={<Welcome />} />
+          {/* Welcome/Rules Page - Redirect to dashboard if logged in */}
+          <Route path="/" element={
+            user ? <Dashboard user={user} /> : <Welcome />
+          } />
+          
+          {/* Welcome page - Always accessible */}
+          <Route path="/welcome" element={<Welcome />} />
           
           {/* Test Firebase Route */}
           <Route path="/test-firebase" element={<TestFirebase />} />

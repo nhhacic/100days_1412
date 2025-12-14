@@ -257,7 +257,7 @@ function AdminApproval() {
                 Trang chủ
               </button>
               <button
-                onClick={() => auth.signOut()}
+                onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
                 className="flex items-center bg-white/20 text-white px-4 py-2 rounded-lg hover:bg-white/30"
               >
                 <LogOut className="w-4 h-4 mr-1" />
