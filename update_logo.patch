@@ -1,0 +1,18 @@
+--- a/src/components/Welcome.jsx
++++ b/src/components/Welcome.jsx
+@@ -26,9 +26,14 @@
+       <div className="bg-gradient-to-r from-blue-600 to-green-500 text-white py-8 px-4 text-center">
+         <div className="max-w-6xl mx-auto">
+           <div className="inline-flex items-center justify-center w-20 h-20 bg-white/20 rounded-full mb-4">
+-            <Trophy className="w-10 h-10" />
++            <img 
++              src="/logo.png" 
++              alt="Challenge Logo" 
++              className="w-12 h-12 object-contain"
++              onError={(e) => e.target.style.display = 'none'}
++            />
++            <Trophy className="w-10 h-10" style={{ display: 'none' }} />
+           </div>
+-          <h1 className="text-4xl md:text-5xl font-bold mb-2">
+             {seasonName}
+           </h1>
