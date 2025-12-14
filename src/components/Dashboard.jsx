@@ -12,6 +12,7 @@ import {
   FileText, Award, Flame, Home, ArrowUp, Footprints
 } from 'lucide-react';
 import logo from '/logo.png?url';
+import NotificationBell from './NotificationBell';
 
 
 function Dashboard({ user }) {
@@ -350,13 +351,18 @@ function Dashboard({ user }) {
               )}
             </div>
             
-            <button
-              onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
-              className="flex items-center bg-white/90 text-gray-700 hover:bg-white px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm"
-            >
-              <LogOut className="w-4 h-4 mr-1" />
-              <span className="hidden sm:inline">Đăng xuất</span>
-            </button>
+            <div className="flex items-center space-x-2">
+              {/* Notification Bell */}
+              <NotificationBell userId={user?.uid} />
+              
+              <button
+                onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
+                className="flex items-center bg-white/90 text-gray-700 hover:bg-white px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm"
+              >
+                <LogOut className="w-4 h-4 mr-1" />
+                <span className="hidden sm:inline">Đăng xuất</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>

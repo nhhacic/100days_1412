@@ -22,8 +22,9 @@ import {
   FileBarChart, FileSpreadsheet, FileJson, FileText as FileTextIcon,
   Calculator, Percent, Hash, Thermometer, Gauge,
   Battery, BatteryCharging, BatteryFull, BatteryLow,
-  Footprints, Bike
+  Footprints, Bike, Bell
 } from 'lucide-react';
+import NotificationManager from './NotificationManager';
 
 function AdminIntegratedDashboard() {
   const navigate = useNavigate();
@@ -31,6 +32,7 @@ function AdminIntegratedDashboard() {
   const [allUsers, setAllUsers] = useState([]);
   const [filteredUsers, setFilteredUsers] = useState([]);
   const [presenceData, setPresenceData] = useState({}); // Lưu trạng thái online của users
+  const [activeTab, setActiveTab] = useState('users'); // 'users' | 'notifications'
   const [stats, setStats] = useState({
     total: 0,
     pending: 0,
@@ -645,8 +647,39 @@ function AdminIntegratedDashboard() {
           </div>
         </div>
 
+        {/* Tabs Navigation */}
+        <div className="flex space-x-2 mb-6">
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`flex items-center px-4 py-2 rounded-lg font-medium transition ${
+              activeTab === 'users'
+                ? 'bg-white text-purple-600 shadow'
+                : 'bg-white/50 text-gray-600 hover:bg-white/80'
+            }`}
+          >
+            <Users className="w-4 h-4 mr-2" />
+            Quản lý người dùng
+          </button>
+          <button
+            onClick={() => setActiveTab('notifications')}
+            className={`flex items-center px-4 py-2 rounded-lg font-medium transition ${
+              activeTab === 'notifications'
+                ? 'bg-white text-purple-600 shadow'
+                : 'bg-white/50 text-gray-600 hover:bg-white/80'
+            }`}
+          >
+            <Bell className="w-4 h-4 mr-2" />
+            Thông báo
+          </button>
+        </div>
+
+        {/* Notification Manager Tab */}
+        {activeTab === 'notifications' && (
+          <NotificationManager currentUser={auth.currentUser} />
+        )}
+
         {/* Main Content - List View */}
-        {viewMode === 'list' ? (
+        {activeTab === 'users' && viewMode === 'list' ? (
           <>
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -1057,7 +1090,7 @@ function AdminIntegratedDashboard() {
               )}
             </div>
           </>
-        ) : (
+        ) : activeTab === 'users' && viewMode === 'details' ? (
           /* Details View */
           <div className="bg-white rounded-xl shadow overflow-hidden">
             {/* User Header */}
@@ -1370,7 +1403,7 @@ function AdminIntegratedDashboard() {
               </div>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
