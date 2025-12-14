@@ -1,6 +1,6 @@
 import { arrayUnion } from 'firebase/firestore';
 import { db } from './firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import axios from 'axios';
 
 // Strava Configuration từ environment variables
@@ -116,6 +116,36 @@ class StravaService {
     return this.isAuthenticated();
   }
 
+  // Đồng bộ token từ Firestore về localStorage và instance
+  async syncTokensFromFirebase(userId) {
+    try {
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      if (userDoc.exists()) {
+        const data = userDoc.data();
+        if (data.strava_access_token && data.strava_refresh_token && data.strava_expires_at) {
+          // Set lại localStorage và instance
+          localStorage.setItem('strava_access_token', data.strava_access_token);
+          localStorage.setItem('strava_refresh_token', data.strava_refresh_token);
+          localStorage.setItem('strava_expires_at', data.strava_expires_at);
+          if (data.strava_athlete) {
+            localStorage.setItem('strava_athlete', JSON.stringify(data.strava_athlete));
+            this.athlete = data.strava_athlete;
+          }
+          this.accessToken = data.strava_access_token;
+          this.refreshToken = data.strava_refresh_token;
+          this.expiresAt = data.strava_expires_at;
+          // Nếu token hết hạn, thử refresh
+          const authenticated = await this.refreshTokenIfNeeded();
+          console.log('Đã đồng bộ token Strava từ Firestore, authenticated:', authenticated);
+          return authenticated;
+        }
+      }
+    } catch (err) {
+      console.error('syncTokensFromFirebase error:', err);
+    }
+    return false;
+  }
+
   // ========== STORAGE METHODS ==========
 
   saveTokens(data) {
@@ -176,8 +206,21 @@ class StravaService {
       if (afterTimestamp) {
         params.after = afterTimestamp;
       } else {
-        const thirtyDaysAgo = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60);
-        params.after = thirtyDaysAgo;
+        // Lấy ngày bắt đầu thử thách từ challengeConfig
+        let startDate = null;
+        try {
+          // dynamic import để tránh lỗi vòng lặp
+          const challengeConfig = (await import('./challengeConfig.js')).default;
+          const config = challengeConfig.getConfig ? challengeConfig.getConfig() : challengeConfig;
+          startDate = config.startDate || (config && config.config && config.config.startDate);
+        } catch (e) { console.error('Không lấy được startDate thử thách:', e); }
+        if (startDate) {
+          params.after = Math.floor(new Date(startDate).getTime() / 1000);
+        } else {
+          // fallback: 30 ngày gần nhất
+          const thirtyDaysAgo = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60);
+          params.after = thirtyDaysAgo;
+        }
       }
 
       console.log('Fetching Strava activities with params:', params);
@@ -198,7 +241,7 @@ class StravaService {
         this.clearTokens();
         throw new Error('Session expired. Please reconnect Strava.');
       }
-      
+
       throw error;
     }
   }

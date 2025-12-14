@@ -5,12 +5,14 @@ import { doc, getDoc } from 'firebase/firestore';
 import stravaService from '../services/stravaService';
 import challengeConfig from '../services/challengeConfig';
 import { 
-  Trophy, Activity, Timer, TrendingUp, Calendar, DollarSign,
+  Activity, Timer, TrendingUp, Calendar, DollarSign,
   Target, BarChart3, LogOut, RefreshCw, User,
   AlertCircle, Heart, Zap, Waves, Settings,
   Shield, Clock, CheckCircle, XCircle, Users,
   FileText, Award, Flame, Home
 } from 'lucide-react';
+import logo from '/logo.png?url';
+
 
 function Dashboard({ user }) {
   const navigate = useNavigate();
@@ -20,6 +22,8 @@ function Dashboard({ user }) {
   const [config, setConfig] = useState(challengeConfig.getConfig());
   const [userData, setUserData] = useState(null);
   const [activities, setActivities] = useState([]);
+  // State cho accordion tháng
+  const [openMonth, setOpenMonth] = useState(null);
 
   useEffect(() => {
     const loadUserData = async () => {
@@ -45,8 +49,17 @@ function Dashboard({ user }) {
       }
     };
     
+
+    // Khi user login, luôn sync token từ Firestore về localStorage
+    const syncStravaTokens = async () => {
+      if (user) {
+        const authenticated = await stravaService.syncTokensFromFirebase(user.uid);
+        setStravaConnected(authenticated);
+      }
+    };
+
     loadUserData();
-    setStravaConnected(stravaService.isAuthenticated());
+    syncStravaTokens();
     setConfig(challengeConfig.getConfig());
   }, [user]);
 
@@ -249,7 +262,7 @@ function Dashboard({ user }) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex flex-col md:flex-row md:items-center justify-between">
             <div className="flex items-center">
-              <Trophy className="w-8 h-8 mr-3" />
+              <img src={logo} alt="logo" className="w-10 h-10 mr-3 rounded-lg bg-white object-contain" />
               <div>
                 <h1 className="text-2xl md:text-3xl font-bold">
                   Challenge Dashboard
@@ -271,7 +284,15 @@ function Dashboard({ user }) {
                 </a>
               )}
               <div className="flex items-center bg-white/20 px-3 py-1 rounded-full">
-                <User className="w-4 h-4 mr-2" />
+                {userData?.strava_athlete?.profile || userData?.strava_athlete?.profile_medium ? (
+                  <img
+                    src={userData.strava_athlete.profile_medium || userData.strava_athlete.profile}
+                    alt="avatar"
+                    className="w-7 h-7 rounded-full mr-2 border border-gray-300 object-cover"
+                  />
+                ) : (
+                  <User className="w-4 h-4 mr-2" />
+                )}
                 <span className="text-sm">{userData?.fullName || user?.email?.split('@')[0]}</span>
               </div>
               <button
@@ -355,20 +376,7 @@ function Dashboard({ user }) {
             </div>
           </div>
 
-          <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl shadow p-6">
-            <div className="flex items-center mb-4">
-              <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-                <Activity className="w-6 h-6" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold">{metrics.activityCount}</div>
-                <div className="text-sm opacity-90">Hoạt động</div>
-              </div>
-            </div>
-            <div className="text-sm">
-              Đã đồng bộ từ Strava
-            </div>
-          </div>
+
 
           <div className="bg-gradient-to-r from-red-500 to-pink-500 text-white rounded-xl shadow p-6">
             <div className="flex items-center mb-4">
@@ -440,34 +448,112 @@ function Dashboard({ user }) {
           </div>
           
           {activities.length > 0 ? (
-            <div className="space-y-4">
-              {activities.map((activity, index) => (
-                <div key={activity.id || index} className="flex items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center mr-4 ${
-                    activity.type?.toLowerCase().includes('run') ? 'bg-blue-100' : 'bg-teal-100'
-                  }`}>
-                    {activity.type?.toLowerCase().includes('run') ? (
-                      <Zap className="w-5 h-5 text-blue-600" />
-                    ) : (
-                      <Waves className="w-5 h-5 text-teal-600" />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-medium text-gray-900">{activity.name}</h4>
-                    <div className="flex items-center text-sm text-gray-600 mt-1">
-                      <Calendar className="w-3 h-3 mr-1" />
-                      {new Date(activity.start_date).toLocaleDateString('vi-VN')}
-                      <span className="mx-2">•</span>
-                      <Timer className="w-3 h-3 mr-1" />
-                      {activity.moving_time ? Math.floor(activity.moving_time / 60) : 0} phút
+            <div>
+              {/* Gom theo tháng, accordion ngoài IIFE, dùng state openMonth */}
+              {(() => {
+                const sorted = [...activities].sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
+                const grouped = {};
+                sorted.forEach(act => {
+                  const d = new Date(act.start_date);
+                  const key = `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2, '0')}`;
+                  if (!grouped[key]) grouped[key] = [];
+                  grouped[key].push(act);
+                });
+                return Object.keys(grouped).sort((a,b)=>b.localeCompare(a)).map(monthKey => {
+                  const monthActs = grouped[monthKey];
+                  const [year, month] = monthKey.split('-');
+                  // Tính tổng chạy, bơi, phạt tháng này
+                  let run = 0, swim = 0;
+                  monthActs.forEach(act => {
+                    const type = act.type?.toLowerCase() || act.sport_type?.toLowerCase() || '';
+                    const dist = act.distance ? act.distance/1000 : 0;
+                    if (type.includes('run')) run += dist;
+                    if (type.includes('swim')) swim += dist;
+                  });
+                  const gender = userData?.gender || 'male';
+                  const target = config.monthlyTargets[gender];
+                  const runDeficit = Math.max(0, target.run - run);
+                  const swimDeficit = Math.max(0, target.swim - swim);
+                  const penalty = challengeConfig.calculatePenalty(runDeficit, swimDeficit).total;
+                  const isOpen = openMonth === monthKey;
+                  return (
+                    <div key={monthKey} className="mb-8 border rounded-lg">
+                      <div className="flex items-center gap-4 mb-2 cursor-pointer select-none px-4 py-2 bg-gray-50 hover:bg-gray-100 rounded-t-lg" onClick={() => setOpenMonth(isOpen ? null : monthKey)}>
+                        <div className="font-bold text-lg text-blue-700 flex-1">
+                          {`Tháng ${month}/${year}`} ({monthActs.length} hoạt động)
+                        </div>
+                        <div className="flex gap-4 items-center">
+                          <div className="text-sm text-red-600 font-semibold bg-red-50 rounded px-2 py-1">
+                            Phạt: {challengeConfig.formatCurrency(penalty)}
+                          </div>
+                          <div className="text-sm text-gray-700">🏃‍♂️ <b>{run.toFixed(2)} km</b></div>
+                          <div className="text-sm text-gray-700">🏊‍♂️ <b>{swim.toFixed(2)} km</b></div>
+                          <span className="ml-2 text-gray-400">{isOpen ? '▲' : '▼'}</span>
+                        </div>
+                      </div>
+                      {isOpen && (
+                        <div className="space-y-4 px-2 pt-2 pb-4">
+                          {monthActs.map((activity, idx) => {
+                            // Tính toán các thông số
+                            const startDate = new Date(activity.start_date);
+                            const startTimeStr = startDate.toLocaleString('vi-VN', { hour12: false });
+                            const movingTime = activity.moving_time || 0;
+                            const totalTimeStr = `${Math.floor(movingTime/60)}:${(movingTime%60).toString().padStart(2,'0')} phút`;
+                            const distanceKm = activity.distance ? activity.distance/1000 : 0;
+                            const type = activity.type?.toLowerCase() || '';
+                            let avgPace = '';
+                            if (type.includes('run') && distanceKm > 0) {
+                              avgPace = `${Math.floor(movingTime/(60*distanceKm))}:${(Math.round((movingTime/distanceKm)%60)).toString().padStart(2,'0')} /km`;
+                            } else if (type.includes('swim') && activity.distance > 0) {
+                              // pace swim: phút/100m
+                              const pacePer100m = movingTime / (activity.distance/100);
+                              const min = Math.floor(pacePer100m/60);
+                              const sec = Math.round(pacePer100m%60).toString().padStart(2,'0');
+                              avgPace = `${min}:${sec} /100m`;
+                            }
+                            const avgHr = activity.average_heartrate ? `${activity.average_heartrate} bpm` : '';
+                            // Chọn icon đúng loại
+                            let icon, iconBg;
+                            if (type.includes('run')) {
+                              icon = <span className="text-2xl">🏃‍♂️</span>;
+                              iconBg = 'bg-blue-100';
+                            } else if (type.includes('swim')) {
+                              icon = <span className="text-2xl">🏊‍♂️</span>;
+                              iconBg = 'bg-teal-100';
+                            } else {
+                              icon = <Activity className="w-5 h-5 text-orange-600" />;
+                              iconBg = 'bg-orange-100';
+                            }
+                            return (
+                              <div key={activity.id || idx} className={`flex flex-col md:flex-row md:items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 gap-4`}>
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center mr-4 ${iconBg}`}>
+                                  {icon}
+                                </div>
+                                <div className="flex-1">
+                                  <h4 className="font-medium text-gray-900">{activity.name}</h4>
+                                  <div className="flex flex-wrap items-center text-sm text-gray-600 mt-1 gap-x-3 gap-y-1">
+                                    <Calendar className="w-3 h-3 mr-1" />
+                                    <span>{startTimeStr}</span>
+                                    <span className="mx-1">•</span>
+                                    <Timer className="w-3 h-3 mr-1" />
+                                    <span>{totalTimeStr}</span>
+                                    {avgPace && <><span className="mx-1">•</span><span>Pace: {avgPace}</span></>}
+                                    {avgHr && <><span className="mx-1">•</span><span>HR: {avgHr}</span></>}
+                                  </div>
+                                </div>
+                                <div className="text-right min-w-[90px]">
+                                  <div className="font-bold text-lg">{distanceKm.toFixed(2)} km</div>
+                                  <div className="text-sm text-gray-600">Quãng đường</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-bold text-lg">{(activity.distance / 1000).toFixed(2)} km</div>
-                    <div className="text-sm text-gray-600">Quãng đường</div>
-                  </div>
-                </div>
-              ))}
+                  );
+                });
+              })()}
             </div>
           ) : (
             <div className="text-center py-8">
