@@ -12,6 +12,7 @@ import AdminIntegratedDashboard from './components/AdminIntegratedDashboard';
 import AdminConfig from './components/AdminConfig';
 import StravaCallback from './components/StravaCallback';
 import TestFirebase from './components/TestFirebase';
+import InstallPrompt from './components/InstallPrompt';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -81,6 +82,9 @@ function App() {
           {/* Strava Callback */}
           <Route path="/auth/callback" element={<StravaCallback />} />
         </Routes>
+        
+        {/* PWA Install Prompt */}
+        <InstallPrompt />
       </div>
     </Router>
   );

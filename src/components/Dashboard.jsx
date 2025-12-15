@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import logo from '/logo.png?url';
 import NotificationBell from './NotificationBell';
+import PushNotificationToggle from './PushNotificationToggle';
 
 
 function Dashboard({ user }) {
@@ -151,9 +152,24 @@ function Dashboard({ user }) {
     }
   };
 
-  const calculateKPIMetrics = () => {
+  // State để lưu processed activities với quota và validation
+  const [processedData, setProcessedData] = useState(null);
+  const [metrics, setMetrics] = useState({
+    runDistance: 0,
+    swimDistance: 0,
+    totalDistance: 0,
+    activityCount: 0,
+    kpiProgress: { run: 0, swim: 0 },
+    penalty: 0,
+    runDeficit: 0,
+    swimDeficit: 0,
+    penaltyDetails: null
+  });
+
+  // Recalculate khi activities hoặc userData thay đổi
+  useEffect(() => {
     if (!userData || activities.length === 0) {
-      return {
+      setMetrics({
         runDistance: 0,
         swimDistance: 0,
         totalDistance: 0,
@@ -161,55 +177,45 @@ function Dashboard({ user }) {
         kpiProgress: { run: 0, swim: 0 },
         penalty: 0,
         runDeficit: 0,
-        swimDeficit: 0
-      };
+        swimDeficit: 0,
+        penaltyDetails: null
+      });
+      return;
     }
 
-    const target = config.monthlyTargets[userData.gender || 'male'];
     const currentMonth = new Date().getMonth();
+    const currentYear = new Date().getFullYear();
     
+    // Filter activities cho tháng hiện tại
     const monthActivities = activities.filter(activity => {
       const activityDate = new Date(activity.start_date);
-      return activityDate.getMonth() === currentMonth;
+      return activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear;
     });
 
-    let runDistance = 0;
-    let swimDistance = 0;
+    // Sử dụng hàm mới để xử lý với quota và validation
+    const result = challengeConfig.processActivitiesWithQuota(monthActivities, userData.gender || 'male');
+    
+    // Cập nhật processed data để hiển thị
+    setProcessedData(result);
 
-    monthActivities.forEach(activity => {
-      const distanceKm = activity.distance / 1000;
-      const type = activity.type?.toLowerCase() || activity.sport_type?.toLowerCase() || '';
-      
-      if (type.includes('run')) {
-        runDistance += distanceKm;
-      } else if (type.includes('swim')) {
-        swimDistance += distanceKm;
-      }
-    });
-
-    const runDeficit = Math.max(0, target.run - runDistance);
-    const swimDeficit = Math.max(0, target.swim - swimDistance);
-    const penalty = challengeConfig.calculatePenalty(runDeficit, swimDeficit).total;
-
-    return {
-      runDistance: parseFloat(runDistance.toFixed(1)),
-      swimDistance: parseFloat(swimDistance.toFixed(1)),
-      totalDistance: parseFloat((runDistance + swimDistance).toFixed(1)),
+    setMetrics({
+      runDistance: result.summary.totalRunCounted,
+      swimDistance: result.summary.totalSwimCounted,
+      totalDistance: parseFloat((result.summary.totalRunCounted + result.summary.totalSwimCounted).toFixed(1)),
       activityCount: monthActivities.length,
       kpiProgress: {
-        run: Math.min(100, (runDistance / target.run) * 100),
-        swim: Math.min(100, (swimDistance / target.swim) * 100)
+        run: result.summary.runProgress,
+        swim: result.summary.swimProgress
       },
-      penalty,
-      runDeficit: parseFloat(runDeficit.toFixed(1)),
-      swimDeficit: parseFloat(swimDeficit.toFixed(1))
-    };
-  };
+      penalty: result.summary.totalPenalty,
+      runDeficit: result.summary.finalRunDeficit,
+      swimDeficit: result.summary.finalSwimDeficit,
+      penaltyDetails: result.summary
+    });
+  }, [activities, userData]);
 
   const formatCurrency = (amount) => challengeConfig.formatCurrency(amount);
   const formatDate = (date) => challengeConfig.formatDate(date);
-
-  const metrics = calculateKPIMetrics();
 
   if (loading) {
     return (
@@ -238,7 +244,7 @@ function Dashboard({ user }) {
           </p>
           <div className="space-y-3">
             <button
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/welcome')}
               className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition"
             >
               Về trang chủ
@@ -277,7 +283,7 @@ function Dashboard({ user }) {
           )}
           <div className="space-y-3">
             <button
-              onClick={() => navigate('/')}
+              onClick={() => navigate('/welcome')}
               className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition"
             >
               Về trang chủ
@@ -368,6 +374,11 @@ function Dashboard({ user }) {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Push Notification Toggle */}
+        <div className="mb-6">
+          <PushNotificationToggle userId={user?.uid} />
+        </div>
+
         {/* Strava Connection */}
         <div className="bg-white rounded-xl shadow p-6 mb-6">
           <div className="flex items-center justify-between">
@@ -501,6 +512,10 @@ function Dashboard({ user }) {
             <div>
               {/* Gom theo tháng, accordion ngoài IIFE, dùng state openMonth */}
               {(() => {
+                // Xử lý activities với quota và validation
+                const currentMonth = new Date().getMonth();
+                const currentYear = new Date().getFullYear();
+                
                 const sorted = [...activities].sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
                 const grouped = {};
                 sorted.forEach(act => {
@@ -509,23 +524,25 @@ function Dashboard({ user }) {
                   if (!grouped[key]) grouped[key] = [];
                   grouped[key].push(act);
                 });
+                
                 return Object.keys(grouped).sort((a,b)=>b.localeCompare(a)).map(monthKey => {
                   const monthActs = grouped[monthKey];
                   const [year, month] = monthKey.split('-');
-                  // Tính tổng chạy, bơi, phạt tháng này
-                  let run = 0, swim = 0;
-                  monthActs.forEach(act => {
-                    const type = act.type?.toLowerCase() || act.sport_type?.toLowerCase() || '';
-                    const dist = act.distance ? act.distance/1000 : 0;
-                    if (type.includes('run')) run += dist;
-                    if (type.includes('swim')) swim += dist;
-                  });
                   const gender = userData?.gender || 'male';
-                  const target = config.monthlyTargets[gender];
-                  const runDeficit = Math.max(0, target.run - run);
-                  const swimDeficit = Math.max(0, target.swim - swim);
-                  const penalty = challengeConfig.calculatePenalty(runDeficit, swimDeficit).total;
+                  
+                  // Xử lý với quota và validation cho tháng này
+                  let monthResult;
+                  try {
+                    monthResult = challengeConfig.processActivitiesWithQuota(monthActs, gender);
+                  } catch (err) {
+                    console.error('Error processing activities:', err);
+                    monthResult = { activities: monthActs.map(a => ({...a, validation: {}})), summary: { totalRunCounted: 0, totalSwimCounted: 0, runTarget: 80, swimTarget: 16, runProgress: 0, swimProgress: 0, totalPenalty: 0, conversion: {} } };
+                  }
+                  const summary = monthResult?.summary || { totalRunCounted: 0, totalSwimCounted: 0, runTarget: 80, swimTarget: 16, runProgress: 0, swimProgress: 0, totalPenalty: 0, conversion: {} };
+                  
                   const isOpen = openMonth === monthKey;
+                  const isCurrentMonth = parseInt(month) === currentMonth + 1 && parseInt(year) === currentYear;
+                  
                   return (
                     <div key={monthKey} className="mb-8 border rounded-lg overflow-hidden">
                       <div 
@@ -537,10 +554,11 @@ function Dashboard({ user }) {
                           <div className="font-bold text-lg text-blue-700">
                             {`Tháng ${month}/${year}`} 
                             <span className="text-sm font-normal text-gray-500 ml-2">({monthActs.length} hoạt động)</span>
+                            {isCurrentMonth && <span className="ml-2 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">Tháng hiện tại</span>}
                           </div>
                           <div className="flex items-center gap-3">
-                            <div className="text-sm text-red-600 font-semibold bg-red-50 rounded px-2 py-1">
-                              Phạt: {challengeConfig.formatCurrency(penalty)}
+                            <div className={`text-sm font-semibold rounded px-2 py-1 ${summary.totalPenalty > 0 ? 'text-red-600 bg-red-50' : 'text-green-600 bg-green-50'}`}>
+                              {summary.totalPenalty > 0 ? `Phạt: ${challengeConfig.formatCurrency(summary.totalPenalty)}` : '✅ Đủ KPI'}
                             </div>
                             <span className="text-gray-400 text-lg">{isOpen ? '▲' : '▼'}</span>
                           </div>
@@ -553,18 +571,18 @@ function Dashboard({ user }) {
                             <span className="text-lg">🏃</span>
                             <div className="flex-1">
                               <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-600">Chạy bộ</span>
-                                <span className="font-medium">{run.toFixed(1)} / {target.run} km</span>
+                                <span className="text-gray-600">Chạy bộ (đã tính quota)</span>
+                                <span className="font-medium">{(summary.totalRunCounted || 0).toFixed(1)} / {summary.runTarget || 0} km</span>
                               </div>
                               <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                                 <div 
-                                  className={`h-full rounded-full transition-all ${run >= target.run ? 'bg-green-500' : 'bg-blue-500'}`}
-                                  style={{ width: `${Math.min(100, (run / target.run) * 100)}%` }}
+                                  className={`h-full rounded-full transition-all ${(summary.runProgress || 0) >= 100 ? 'bg-green-500' : 'bg-blue-500'}`}
+                                  style={{ width: `${Math.min(100, summary.runProgress || 0)}%` }}
                                 ></div>
                               </div>
                             </div>
-                            <span className={`text-xs font-bold ${run >= target.run ? 'text-green-600' : 'text-gray-500'}`}>
-                              {((run / target.run) * 100).toFixed(0)}%
+                            <span className={`text-xs font-bold ${(summary.runProgress || 0) >= 100 ? 'text-green-600' : 'text-gray-500'}`}>
+                              {(summary.runProgress || 0).toFixed(0)}%
                             </span>
                           </div>
                           
@@ -573,46 +591,67 @@ function Dashboard({ user }) {
                             <span className="text-lg">🏊</span>
                             <div className="flex-1">
                               <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-600">Bơi lội</span>
-                                <span className="font-medium">{swim.toFixed(1)} / {target.swim} km</span>
+                                <span className="text-gray-600">Bơi lội (đã tính quota)</span>
+                                <span className="font-medium">{(summary.totalSwimCounted || 0).toFixed(1)} / {summary.swimTarget || 0} km</span>
                               </div>
                               <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                                 <div 
-                                  className={`h-full rounded-full transition-all ${swim >= target.swim ? 'bg-green-500' : 'bg-teal-500'}`}
-                                  style={{ width: `${Math.min(100, (swim / target.swim) * 100)}%` }}
+                                  className={`h-full rounded-full transition-all ${(summary.swimProgress || 0) >= 100 ? 'bg-green-500' : 'bg-teal-500'}`}
+                                  style={{ width: `${Math.min(100, summary.swimProgress || 0)}%` }}
                                 ></div>
                               </div>
                             </div>
-                            <span className={`text-xs font-bold ${swim >= target.swim ? 'text-green-600' : 'text-gray-500'}`}>
-                              {((swim / target.swim) * 100).toFixed(0)}%
+                            <span className={`text-xs font-bold ${(summary.swimProgress || 0) >= 100 ? 'text-green-600' : 'text-gray-500'}`}>
+                              {(summary.swimProgress || 0).toFixed(0)}%
                             </span>
                           </div>
                         </div>
+                        
+                        {/* Conversion info */}
+                        {(summary.conversion?.runFromSwim > 0 || summary.conversion?.swimFromRun > 0) && (
+                          <div className="mt-2 text-xs text-purple-600 bg-purple-50 rounded px-2 py-1">
+                            🔄 {summary.message}
+                          </div>
+                        )}
                       </div>
                       
                       {isOpen && (
                         <div className="space-y-4 px-2 pt-2 pb-4">
-                          {monthActs.map((activity, idx) => {
-                            // Tính toán các thông số
+                          {(monthResult?.activities || monthActs).map((activity, idx) => {
+                            // Lấy validation data
+                            const v = activity.validation || {};
                             const startDate = new Date(activity.start_date);
                             const startTimeStr = startDate.toLocaleString('vi-VN', { hour12: false });
                             const movingTime = activity.moving_time || 0;
-                            const totalTimeStr = `${Math.floor(movingTime/60)}:${(movingTime%60).toString().padStart(2,'0')} phút`;
+                            const totalTimeStr = `${Math.floor(movingTime/60)}:${(movingTime%60).toString().padStart(2,'0')}`;
                             const distanceKm = activity.distance ? activity.distance/1000 : 0;
                             const type = activity.type?.toLowerCase() || '';
-                            let avgPace = '';
-                            if (type.includes('run') && distanceKm > 0) {
-                              avgPace = `${Math.floor(movingTime/(60*distanceKm))}:${(Math.round((movingTime/distanceKm)%60)).toString().padStart(2,'0')} /km`;
-                            } else if (type.includes('swim') && activity.distance > 0) {
-                              // pace swim: phút/100m
+                            
+                            // Format pace
+                            let paceStr = '';
+                            if (type.includes('run') && v.pace > 0) {
+                              const paceMin = Math.floor(v.pace);
+                              const paceSec = Math.round((v.pace % 1) * 60);
+                              paceStr = `${paceMin}:${paceSec.toString().padStart(2,'0')} /km`;
+                            } else if (type.includes('swim') && distanceKm > 0) {
                               const pacePer100m = movingTime / (activity.distance/100);
                               const min = Math.floor(pacePer100m/60);
                               const sec = Math.round(pacePer100m%60).toString().padStart(2,'0');
-                              avgPace = `${min}:${sec} /100m`;
+                              paceStr = `${min}:${sec} /100m`;
                             }
+                            
                             const avgHr = activity.average_heartrate ? `${activity.average_heartrate} bpm` : '';
-                            // Chọn icon đúng loại
-                            let icon, iconBg;
+                            
+                            // Icon và màu sắc
+                            let icon, iconBg, borderColor;
+                            if (!v.isValid) {
+                              borderColor = 'border-red-300 bg-red-50';
+                            } else if (v.quotaExceeded) {
+                              borderColor = 'border-orange-300 bg-orange-50';
+                            } else {
+                              borderColor = 'border-gray-200';
+                            }
+                            
                             if (type.includes('run')) {
                               icon = <span className="text-2xl">🏃‍♂️</span>;
                               iconBg = 'bg-blue-100';
@@ -623,26 +662,84 @@ function Dashboard({ user }) {
                               icon = <Activity className="w-5 h-5 text-orange-600" />;
                               iconBg = 'bg-orange-100';
                             }
+                            
                             return (
-                              <div key={activity.id || idx} className={`flex flex-col md:flex-row md:items-center p-4 border border-gray-200 rounded-lg hover:bg-gray-50 gap-4`}>
-                                <div className={`w-10 h-10 rounded-full flex items-center justify-center mr-4 ${iconBg}`}>
-                                  {icon}
-                                </div>
-                                <div className="flex-1">
-                                  <h4 className="font-medium text-gray-900">{activity.name}</h4>
-                                  <div className="flex flex-wrap items-center text-sm text-gray-600 mt-1 gap-x-3 gap-y-1">
-                                    <Calendar className="w-3 h-3 mr-1" />
-                                    <span>{startTimeStr}</span>
-                                    <span className="mx-1">•</span>
-                                    <Timer className="w-3 h-3 mr-1" />
-                                    <span>{totalTimeStr}</span>
-                                    {avgPace && <><span className="mx-1">•</span><span>Pace: {avgPace}</span></>}
-                                    {avgHr && <><span className="mx-1">•</span><span>HR: {avgHr}</span></>}
+                              <div key={activity.id || idx} className={`flex flex-col p-4 border rounded-lg ${borderColor}`}>
+                                {/* Main info row */}
+                                <div className="flex flex-col md:flex-row md:items-center gap-4">
+                                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${iconBg}`}>
+                                    {icon}
+                                  </div>
+                                  <div className="flex-1">
+                                    <h4 className="font-medium text-gray-900">{activity.name}</h4>
+                                    <div className="flex flex-wrap items-center text-sm text-gray-600 mt-1 gap-x-3 gap-y-1">
+                                      <span className="flex items-center"><Calendar className="w-3 h-3 mr-1" />{startTimeStr}</span>
+                                      <span>•</span>
+                                      <span className="flex items-center"><Timer className="w-3 h-3 mr-1" />{totalTimeStr} phút</span>
+                                      {paceStr && <><span>•</span><span>Pace: {paceStr}</span></>}
+                                      {v.avgSpeed > 0 && <><span>•</span><span>TB: {v.avgSpeed} km/h</span></>}
+                                      {avgHr && <><span>•</span><span>HR: {avgHr}</span></>}
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Distance info */}
+                                  <div className="text-right min-w-[120px]">
+                                    <div className="font-bold text-lg">{distanceKm.toFixed(2)} km</div>
+                                    {v.countedDistance !== undefined && v.countedDistance !== distanceKm && (
+                                      <div className={`text-sm ${v.countedDistance < distanceKm ? 'text-orange-600' : 'text-green-600'}`}>
+                                        → Tính: {v.countedDistance.toFixed(2)} km
+                                      </div>
+                                    )}
+                                    {v.notCounted && (
+                                      <div className="text-sm text-gray-500">Không tính KPI</div>
+                                    )}
                                   </div>
                                 </div>
-                                <div className="text-right min-w-[90px]">
-                                  <div className="font-bold text-lg">{distanceKm.toFixed(2)} km</div>
-                                  <div className="text-sm text-gray-600">Quãng đường</div>
+                                
+                                {/* Validation & Quota details */}
+                                <div className="mt-3 pt-3 border-t border-gray-200 text-xs space-y-1">
+                                  {/* Quota info */}
+                                  {v.dailyQuota && (
+                                    <div className="flex items-center text-gray-600">
+                                      <span className="mr-2">📊</span>
+                                      <span>Quota ngày: {v.dailyQuota} km</span>
+                                      {v.dayTotalBefore > 0 && (
+                                        <span className="ml-2 text-gray-500">(đã có {v.dayTotalBefore} km trước đó)</span>
+                                      )}
+                                    </div>
+                                  )}
+                                  
+                                  {/* Quota exceeded warning */}
+                                  {v.quotaExceeded && (
+                                    <div className="flex items-center text-orange-600">
+                                      <span className="mr-2">⚠️</span>
+                                      <span>Vượt quota ngày! Chỉ tính {v.countedDistance} km (dư {v.quotaRemainder} km không tính)</span>
+                                    </div>
+                                  )}
+                                  
+                                  {/* Validity status */}
+                                  {v.isValid ? (
+                                    <div className="flex items-center text-green-600">
+                                      <span className="mr-2">✅</span>
+                                      <span>Hợp lệ - Tính vào KPI</span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center text-red-600">
+                                      <span className="mr-2">🚫</span>
+                                      <span>Không hợp lệ - Không tính vào KPI</span>
+                                    </div>
+                                  )}
+                                  
+                                  {/* Issues list */}
+                                  {v.issues && v.issues.length > 0 && (
+                                    <div className="mt-2 p-2 bg-yellow-50 rounded text-yellow-800">
+                                      {v.issues.map((issue, i) => (
+                                        <div key={i} className="flex items-start">
+                                          <span className="mr-1">{issue}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             );
@@ -706,7 +803,7 @@ function Dashboard({ user }) {
                 </a>
               )}
               <button
-                onClick={() => navigate('/')}
+                onClick={() => navigate('/welcome')}
                 className="flex items-center text-blue-600 hover:text-blue-800"
               >
                 <Home className="w-4 h-4 mr-1" />

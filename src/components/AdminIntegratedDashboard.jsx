@@ -22,7 +22,7 @@ import {
   FileBarChart, FileSpreadsheet, FileJson, FileText as FileTextIcon,
   Calculator, Percent, Hash, Thermometer, Gauge,
   Battery, BatteryCharging, BatteryFull, BatteryLow,
-  Footprints, Bike, Bell
+  Footprints, Bike, Bell, Edit, Trash2, Save, X
 } from 'lucide-react';
 import NotificationManager from './NotificationManager';
 
@@ -55,7 +55,20 @@ function AdminIntegratedDashboard() {
   const [selectedUser30DayChart, setSelectedUser30DayChart] = useState([]);
   const [showDepositImages, setShowDepositImages] = useState({});
   const [selectedUsers, setSelectedUsers] = useState([]);
-  const [viewMode, setViewMode] = useState('list'); // 'list' or 'details'
+  const [viewMode, setViewMode] = useState('list'); // 'list', 'details', or 'edit'
+  const [editingUser, setEditingUser] = useState(null); // User đang được edit
+  const [editForm, setEditForm] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    gender: 'male',
+    birthYear: '',
+    status: 'pending_approval',
+    depositPaid: false,
+    previousSeasonTransfer: false,
+    role: 'user',
+    isActive: true
+  }); // Form data cho edit
   const [config, setConfig] = useState(challengeConfig.getConfig());
   const [systemConfig, setSystemConfig] = useState({
     kpiTargets: config.monthlyTargets,
@@ -178,6 +191,7 @@ function AdminIntegratedDashboard() {
   const calculateUserMetrics = async (user) => {
     // Lấy activities THẬT từ Firestore (đã được sync từ Strava)
     const target = config.monthlyTargets[user.gender || 'male'];
+    const gender = user.gender || 'male';
     
     // Lấy activities từ user document trong Firestore
     const userActivities = user.strava_activities || [];
@@ -187,52 +201,35 @@ function AdminIntegratedDashboard() {
     const currentMonth = now.getMonth();
     const currentYear = now.getFullYear();
     
-    // Tính toán distance từ activities thật
-    let runDistance = 0;
-    let swimDistance = 0;
-    let totalDistance = 0;
-    let activityCount = 0;
+    // Filter activities cho tháng hiện tại
+    const monthActivities = userActivities.filter(activity => {
+      const activityDate = new Date(activity.start_date);
+      return activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear;
+    });
     
-    const thirtyDayActivities = [];
+    // Xử lý activities với quota và validation
+    const monthResult = challengeConfig.processActivitiesWithQuota(monthActivities, gender);
+    const { summary, activities: processedActivities } = monthResult;
+    
+    // Lấy activities 30 ngày gần đây
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
-    userActivities.forEach(activity => {
-      const activityDate = new Date(activity.start_date);
-      const distanceKm = (activity.distance || 0) / 1000;
-      const type = (activity.type || activity.sport_type || '').toLowerCase();
-      
-      // Tính cho tháng hiện tại
-      if (activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear) {
-        if (type.includes('run') || type.includes('walk')) {
-          runDistance += distanceKm;
-        } else if (type.includes('swim')) {
-          swimDistance += distanceKm;
-        }
-        totalDistance += distanceKm;
-        activityCount++;
-      }
-      
-      // Lấy activities 30 ngày gần đây
-      if (activityDate >= thirtyDaysAgo) {
-        thirtyDayActivities.push({
+    const thirtyDayActivities = userActivities
+      .filter(activity => new Date(activity.start_date) >= thirtyDaysAgo)
+      .map(activity => {
+        const distanceKm = (activity.distance || 0) / 1000;
+        const type = (activity.type || activity.sport_type || '').toLowerCase();
+        const validation = challengeConfig.validateActivity(activity);
+        return {
           ...activity,
-          distanceKm: distanceKm,
+          distanceKm,
+          validation,
           activityType: type.includes('run') || type.includes('walk') ? 'Run' : 
                        type.includes('swim') ? 'Swim' : 
                        type.includes('ride') || type.includes('bike') ? 'Ride' : 'Other'
-        });
-      }
-    });
-    
-    // Tính deficit và penalty
-    const runDeficit = Math.max(0, target.run - runDistance);
-    const swimDeficit = Math.max(0, target.swim - swimDistance);
-    const penalty = challengeConfig.calculatePenalty(runDeficit, swimDeficit).total;
-    
-    // Tính progress
-    const runProgress = Math.min(100, (runDistance / target.run) * 100);
-    const swimProgress = Math.min(100, (swimDistance / target.swim) * 100);
+        };
+      });
     
     // Tính streak (số ngày liên tiếp có hoạt động)
     const streak = calculateStreak(userActivities);
@@ -241,15 +238,17 @@ function AdminIntegratedDashboard() {
     const monthlyStats = calculateMonthlyStatsFromReal(userActivities);
     
     return {
-      runDistance: parseFloat(runDistance.toFixed(1)),
-      swimDistance: parseFloat(swimDistance.toFixed(1)),
-      totalDistance: parseFloat(totalDistance.toFixed(1)),
-      activityCount,
-      runProgress: parseFloat(runProgress.toFixed(1)),
-      swimProgress: parseFloat(swimProgress.toFixed(1)),
-      penalty,
-      runDeficit: parseFloat(runDeficit.toFixed(1)),
-      swimDeficit: parseFloat(swimDeficit.toFixed(1)),
+      runDistance: summary.totalRunCounted,
+      swimDistance: summary.totalSwimCounted,
+      totalDistance: parseFloat((summary.totalRunCounted + summary.totalSwimCounted).toFixed(1)),
+      activityCount: monthActivities.length,
+      runProgress: summary.runProgress,
+      swimProgress: summary.swimProgress,
+      penalty: summary.totalPenalty,
+      runDeficit: summary.finalRunDeficit,
+      swimDeficit: summary.finalSwimDeficit,
+      penaltyDetails: summary, // Chi tiết về quy đổi và phạt
+      processedActivities, // Activities đã xử lý với quota/validation
       streak,
       thirtyDayActivities,
       monthlyStats,
@@ -469,11 +468,194 @@ function AdminIntegratedDashboard() {
     }
   };
 
+  // ========== EDIT USER ==========
+  const handleEditUser = (user) => {
+    setEditingUser(user);
+    setEditForm({
+      fullName: user.fullName || '',
+      email: user.email || '',
+      phone: user.phone || '',
+      gender: user.gender || 'male',
+      birthYear: user.birthYear || '',
+      status: user.status || 'pending_approval',
+      depositPaid: user.depositPaid || false,
+      previousSeasonTransfer: user.previousSeasonTransfer || false,
+      role: user.role || 'user',
+      isActive: user.isActive !== false
+    });
+    setViewMode('edit');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingUser) return;
+    
+    try {
+      const updateData = {
+        fullName: editForm.fullName,
+        phone: editForm.phone,
+        gender: editForm.gender,
+        birthYear: editForm.birthYear ? parseInt(editForm.birthYear) : null,
+        status: editForm.status,
+        depositPaid: editForm.depositPaid,
+        previousSeasonTransfer: editForm.previousSeasonTransfer,
+        role: editForm.role,
+        isActive: editForm.isActive,
+        updatedAt: new Date(),
+        updatedBy: auth.currentUser?.email || 'admin'
+      };
+
+      await updateDoc(doc(db, 'users', editingUser.id), updateData);
+      
+      alert('✅ Đã cập nhật thông tin người dùng!');
+      setEditingUser(null);
+      setViewMode('list');
+      loadUsers();
+    } catch (error) {
+      console.error('Error updating user:', error);
+      alert('❌ Lỗi khi cập nhật: ' + error.message);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingUser(null);
+    setEditForm({
+      fullName: '',
+      email: '',
+      phone: '',
+      gender: 'male',
+      birthYear: '',
+      status: 'pending_approval',
+      depositPaid: false,
+      previousSeasonTransfer: false,
+      role: 'user',
+      isActive: true
+    });
+    setViewMode('list');
+  };
+
+  // ========== DELETE USER ==========
+  const handleDeleteUser = async (userId, userName) => {
+    const confirmText = prompt(
+      `⚠️ CẢNH BÁO: Hành động này không thể hoàn tác!\n\n` +
+      `Để xóa người dùng "${userName}", hãy nhập chính xác: DELETE`
+    );
+    
+    if (confirmText !== 'DELETE') {
+      if (confirmText !== null) {
+        alert('❌ Nhập sai. Người dùng KHÔNG bị xóa.');
+      }
+      return;
+    }
+    
+    try {
+      // Xóa user document
+      await deleteDoc(doc(db, 'users', userId));
+      
+      // Xóa presence data nếu có
+      try {
+        await deleteDoc(doc(db, 'presence', userId));
+      } catch (e) {
+        // Ignore if presence doesn't exist
+      }
+      
+      alert('✅ Đã xóa người dùng thành công!');
+      loadUsers();
+      if (selectedUser?.id === userId) {
+        setSelectedUser(null);
+        setViewMode('list');
+      }
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      alert('❌ Lỗi khi xóa người dùng: ' + error.message);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedUsers.length === 0) {
+      alert('Vui lòng chọn ít nhất một người dùng');
+      return;
+    }
+    
+    const confirmText = prompt(
+      `⚠️ CẢNH BÁO: Sẽ xóa ${selectedUsers.length} người dùng!\n\n` +
+      `Hành động này không thể hoàn tác.\n` +
+      `Để xác nhận, hãy nhập: DELETE ${selectedUsers.length}`
+    );
+    
+    if (confirmText !== `DELETE ${selectedUsers.length}`) {
+      if (confirmText !== null) {
+        alert('❌ Nhập sai. KHÔNG có người dùng nào bị xóa.');
+      }
+      return;
+    }
+    
+    try {
+      const deletePromises = selectedUsers.map(userId => 
+        deleteDoc(doc(db, 'users', userId))
+      );
+      
+      await Promise.all(deletePromises);
+      
+      alert(`✅ Đã xóa ${selectedUsers.length} người dùng!`);
+      setSelectedUsers([]);
+      loadUsers();
+    } catch (error) {
+      console.error('Error bulk deleting users:', error);
+      alert('❌ Lỗi khi xóa nhiều người dùng: ' + error.message);
+    }
+  };
+
   const viewUserDetails = async (user) => {
     setSelectedUser(user);
-    setSelectedUserActivities(user.metrics?.thirtyDayActivities || []);
-    setSelectedUserMonthlyStats(user.metrics?.monthlyStats || []);
-    setSelectedUser30DayChart(user.metrics?.thirtyDayChart || []);
+    
+    // Lấy activities trực tiếp từ user document
+    const userActivities = user.strava_activities || [];
+    const gender = user.gender || 'male';
+    
+    // Xử lý activities với quota và validation cho tháng hiện tại
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    
+    // Filter activities cho tháng hiện tại
+    const monthActivities = userActivities.filter(activity => {
+      const activityDate = new Date(activity.start_date);
+      return activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear;
+    });
+    
+    // Xử lý với quota và validation
+    const monthResult = challengeConfig.processActivitiesWithQuota(monthActivities, gender);
+    
+    // Lưu processed activities để hiển thị (tất cả activities của tháng hiện tại)
+    setSelectedUserActivities(monthResult.activities || []);
+    
+    // Cập nhật metrics cho selectedUser với dữ liệu mới tính
+    const updatedUser = {
+      ...user,
+      metrics: {
+        ...user.metrics,
+        runDistance: monthResult.summary.totalRunCounted,
+        swimDistance: monthResult.summary.totalSwimCounted,
+        runProgress: monthResult.summary.runProgress,
+        swimProgress: monthResult.summary.swimProgress,
+        penalty: monthResult.summary.totalPenalty,
+        runDeficit: monthResult.summary.finalRunDeficit,
+        swimDeficit: monthResult.summary.finalSwimDeficit,
+        penaltyDetails: monthResult.summary,
+        activityCount: monthActivities.length
+      }
+    };
+    setSelectedUser(updatedUser);
+    
+    // Tính monthly stats từ tất cả activities
+    setSelectedUserMonthlyStats(calculateMonthlyStatsFromReal(userActivities));
+    
+    // Tạo 30-day chart
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const last30DayActivities = userActivities.filter(a => new Date(a.start_date) >= thirtyDaysAgo);
+    setSelectedUser30DayChart(generateThirtyDayChartFromReal(last30DayActivities));
+    
     setViewMode('details');
   };
 
@@ -555,11 +737,36 @@ function AdminIntegratedDashboard() {
   };
 
   const calculateActivityStats = (activities) => {
-    const totalDistance = activities.reduce((sum, act) => sum + (act.distance / 1000), 0);
-    const totalTime = activities.reduce((sum, act) => sum + act.moving_time, 0);
-    const validActivities = activities.filter(act => act.isValid).length;
+    if (!activities || activities.length === 0) return null;
+    
+    const totalDistance = activities.reduce((sum, act) => sum + ((act.distance || act.distanceKm * 1000 || 0) / 1000), 0);
+    const totalTime = activities.reduce((sum, act) => sum + (act.moving_time || 0), 0);
+    const validActivities = activities.filter(act => act.isValid !== false).length;
     const flaggedActivities = activities.filter(act => act.flagged).length;
     const quotaExceeded = activities.filter(act => act.quotaExceeded).length;
+    
+    // Tính pace trung bình (chỉ cho activities có pace)
+    const activitiesWithPace = activities.filter(act => act.pace || (act.moving_time && act.distance));
+    let averagePace = 0;
+    if (activitiesWithPace.length > 0) {
+      const totalPace = activitiesWithPace.reduce((sum, act) => {
+        if (act.pace) return sum + act.pace;
+        // Tính pace từ moving_time và distance (phút/km)
+        const distKm = (act.distance || 0) / 1000;
+        if (distKm > 0) return sum + (act.moving_time / 60) / distKm;
+        return sum;
+      }, 0);
+      averagePace = parseFloat((totalPace / activitiesWithPace.length).toFixed(1));
+    }
+    
+    // Tính nhịp tim trung bình (chỉ cho activities có heartrate)
+    const activitiesWithHR = activities.filter(act => act.average_heartrate);
+    let averageHeartRate = 0;
+    if (activitiesWithHR.length > 0) {
+      averageHeartRate = Math.round(
+        activitiesWithHR.reduce((sum, act) => sum + act.average_heartrate, 0) / activitiesWithHR.length
+      );
+    }
     
     return {
       totalDistance: parseFloat(totalDistance.toFixed(1)),
@@ -567,10 +774,8 @@ function AdminIntegratedDashboard() {
       validActivities,
       flaggedActivities,
       quotaExceeded,
-      averagePace: activities.length > 0 ? 
-        parseFloat((activities.reduce((sum, act) => sum + act.pace, 0) / activities.length).toFixed(1)) : 0,
-      averageHeartRate: activities.length > 0 ? 
-        Math.round(activities.reduce((sum, act) => sum + act.average_heartrate, 0) / activities.length) : 0
+      averagePace,
+      averageHeartRate
     };
   };
 
@@ -791,6 +996,18 @@ function AdminIntegratedDashboard() {
                       Duyệt đã chọn
                     </button>
                     <button
+                      onClick={handleBulkDelete}
+                      disabled={selectedUsers.length === 0}
+                      className={`px-4 py-2 rounded-lg font-medium flex items-center ${
+                        selectedUsers.length > 0
+                          ? 'bg-red-600 text-white hover:bg-red-700'
+                          : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                      }`}
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Xóa đã chọn
+                    </button>
+                    <button
                       onClick={() => setSelectedUsers([])}
                       className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300"
                     >
@@ -903,14 +1120,34 @@ function AdminIntegratedDashboard() {
                               />
                             </td>
                             <td className="px-6 py-4">
-                              <div>
-                                <div className="font-medium text-gray-900">{user.fullName || 'Chưa có tên'}</div>
-                                <div className="text-sm text-gray-500">{user.email}</div>
-                                <div className="text-xs text-gray-400 mt-1">
-                                  <span className="inline-flex items-center">
-                                    <User className="w-3 h-3 mr-1" />
-                                    {user.gender === 'male' ? 'Nam' : 'Nữ'} • {user.birthYear || 'N/A'}
-                                  </span>
+                              <div className="flex items-center">
+                                {/* Avatar */}
+                                <div className="flex-shrink-0 mr-3">
+                                  {user.strava_athlete?.profile || user.strava_athlete?.profile_medium ? (
+                                    <img
+                                      src={user.strava_athlete.profile_medium || user.strava_athlete.profile}
+                                      alt={user.fullName || 'Avatar'}
+                                      className="w-10 h-10 rounded-full object-cover border-2 border-gray-200"
+                                      onError={(e) => {
+                                        e.target.onerror = null;
+                                        e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user.fullName || user.email || 'U')}&background=random&size=40`;
+                                      }}
+                                    />
+                                  ) : (
+                                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-bold text-sm">
+                                      {(user.fullName || user.email || 'U').charAt(0).toUpperCase()}
+                                    </div>
+                                  )}
+                                </div>
+                                <div>
+                                  <div className="font-medium text-gray-900">{user.fullName || 'Chưa có tên'}</div>
+                                  <div className="text-sm text-gray-500">{user.email}</div>
+                                  <div className="text-xs text-gray-400 mt-1">
+                                    <span className="inline-flex items-center">
+                                      <User className="w-3 h-3 mr-1" />
+                                      {user.gender === 'male' ? 'Nam' : 'Nữ'} • {user.birthYear || 'N/A'}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                             </td>
@@ -997,13 +1234,21 @@ function AdminIntegratedDashboard() {
                               </div>
                             </td>
                             <td className="px-6 py-4">
-                              <div className="flex space-x-2">
+                              <div className="flex flex-wrap gap-2">
                                 <button
                                   onClick={() => viewUserDetails(user)}
                                   className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm hover:bg-blue-200 flex items-center"
                                 >
                                   <Eye className="w-3 h-3 mr-1" />
                                   Chi tiết
+                                </button>
+                                
+                                <button
+                                  onClick={() => handleEditUser(user)}
+                                  className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-lg text-sm hover:bg-yellow-200 flex items-center"
+                                >
+                                  <Edit className="w-3 h-3 mr-1" />
+                                  Sửa
                                 </button>
                                 
                                 {user.status === 'pending_approval' && (
@@ -1024,6 +1269,14 @@ function AdminIntegratedDashboard() {
                                     </button>
                                   </>
                                 )}
+                                
+                                <button
+                                  onClick={() => handleDeleteUser(user.id, user.fullName || user.email)}
+                                  className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-sm hover:bg-red-200 flex items-center"
+                                >
+                                  <Trash2 className="w-3 h-3 mr-1" />
+                                  Xóa
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -1096,38 +1349,60 @@ function AdminIntegratedDashboard() {
             {/* User Header */}
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 border-b">
               <div className="flex items-center justify-between">
-                <div>
-                  <div className="flex items-center">
-                    <button
-                      onClick={() => setViewMode('list')}
-                      className="mr-4 text-gray-600 hover:text-gray-900"
-                    >
-                      <ChevronLeft className="w-5 h-5" />
-                    </button>
-                    <h2 className="text-2xl font-bold text-gray-900">
-                      {selectedUser?.fullName || 'Chưa có tên'}
-                    </h2>
-                    <div className="ml-4 flex space-x-2">
-                      {getStatusBadge(selectedUser?.status)}
-                      {getDepositBadge(selectedUser)}
-                    </div>
-                  </div>
-                  <p className="text-gray-600 mt-1">{selectedUser?.email}</p>
-                  <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
-                    <span className="flex items-center">
-                      <User className="w-3 h-3 mr-1" />
-                      {selectedUser?.gender === 'male' ? 'Nam' : 'Nữ'} • {selectedUser?.birthYear || 'N/A'}
-                    </span>
-                    <span className="flex items-center">
-                      <Calendar className="w-3 h-3 mr-1" />
-                      Đăng ký: {formatDate(selectedUser?.createdAt)}
-                    </span>
-                    {selectedUser?.approvedAt && (
-                      <span className="flex items-center">
-                        <CheckCircle className="w-3 h-3 mr-1 text-green-600" />
-                        Duyệt: {formatDate(selectedUser?.approvedAt)}
-                      </span>
+                <div className="flex items-center">
+                  <button
+                    onClick={() => setViewMode('list')}
+                    className="mr-4 text-gray-600 hover:text-gray-900"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  
+                  {/* Avatar */}
+                  <div className="flex-shrink-0 mr-4">
+                    {selectedUser?.strava_athlete?.profile || selectedUser?.strava_athlete?.profile_medium ? (
+                      <img
+                        src={selectedUser.strava_athlete.profile_medium || selectedUser.strava_athlete.profile}
+                        alt={selectedUser?.fullName || 'Avatar'}
+                        className="w-16 h-16 rounded-full object-cover border-4 border-white shadow-lg"
+                        onError={(e) => {
+                          e.target.onerror = null;
+                          e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedUser?.fullName || selectedUser?.email || 'U')}&background=random&size=64`;
+                        }}
+                      />
+                    ) : (
+                      <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-bold text-2xl border-4 border-white shadow-lg">
+                        {(selectedUser?.fullName || selectedUser?.email || 'U').charAt(0).toUpperCase()}
+                      </div>
                     )}
+                  </div>
+                  
+                  <div>
+                    <div className="flex items-center">
+                      <h2 className="text-2xl font-bold text-gray-900">
+                        {selectedUser?.fullName || 'Chưa có tên'}
+                      </h2>
+                      <div className="ml-4 flex space-x-2">
+                        {getStatusBadge(selectedUser?.status)}
+                        {getDepositBadge(selectedUser)}
+                      </div>
+                    </div>
+                    <p className="text-gray-600 mt-1">{selectedUser?.email}</p>
+                    <div className="flex items-center space-x-4 mt-2 text-sm text-gray-500">
+                      <span className="flex items-center">
+                        <User className="w-3 h-3 mr-1" />
+                        {selectedUser?.gender === 'male' ? 'Nam' : 'Nữ'} • {selectedUser?.birthYear || 'N/A'}
+                      </span>
+                      <span className="flex items-center">
+                        <Calendar className="w-3 h-3 mr-1" />
+                        Đăng ký: {formatDate(selectedUser?.createdAt)}
+                      </span>
+                      {selectedUser?.approvedAt && (
+                        <span className="flex items-center">
+                          <CheckCircle className="w-3 h-3 mr-1 text-green-600" />
+                          Duyệt: {formatDate(selectedUser?.approvedAt)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 
@@ -1212,18 +1487,40 @@ function AdminIntegratedDashboard() {
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-600">Tiền phạt:</span>
-                        <span className={`font-medium ${selectedUser?.metrics?.penalty > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        <span className={`font-medium ${(selectedUser?.metrics?.penalty || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
                           {formatCurrency(selectedUser?.metrics?.penalty || 0)}
                         </span>
                       </div>
-                      {selectedUser?.metrics?.runDeficit > 0 && (
+                      
+                      {/* Chi tiết quy đổi */}
+                      {selectedUser?.metrics?.penaltyDetails && (
+                        <>
+                          {selectedUser.metrics.penaltyDetails.conversion?.runFromSwim > 0 && (
+                            <div className="text-xs text-purple-600 bg-purple-50 rounded px-2 py-1">
+                              🔄 Quy đổi {selectedUser.metrics.penaltyDetails.conversion.swimSurplusUsed?.toFixed(1)}km bơi dư → {selectedUser.metrics.penaltyDetails.conversion.runFromSwim?.toFixed(1)}km chạy
+                            </div>
+                          )}
+                          {selectedUser.metrics.penaltyDetails.conversion?.swimFromRun > 0 && (
+                            <div className="text-xs text-purple-600 bg-purple-50 rounded px-2 py-1">
+                              🔄 Quy đổi {selectedUser.metrics.penaltyDetails.conversion.runSurplusUsed?.toFixed(1)}km chạy dư → {selectedUser.metrics.penaltyDetails.conversion.swimFromRun?.toFixed(1)}km bơi
+                            </div>
+                          )}
+                        </>
+                      )}
+                      
+                      {(selectedUser?.metrics?.runDeficit || 0) > 0 && (
                         <div className="text-sm text-red-600">
-                          Thiếu chạy: {selectedUser.metrics.runDeficit}km
+                          ⚠️ Thiếu chạy: {selectedUser.metrics.runDeficit}km (sau quy đổi)
                         </div>
                       )}
-                      {selectedUser?.metrics?.swimDeficit > 0 && (
+                      {(selectedUser?.metrics?.swimDeficit || 0) > 0 && (
                         <div className="text-sm text-red-600">
-                          Thiếu bơi: {selectedUser.metrics.swimDeficit}km
+                          ⚠️ Thiếu bơi: {selectedUser.metrics.swimDeficit}km (sau quy đổi)
+                        </div>
+                      )}
+                      {(selectedUser?.metrics?.runDeficit || 0) === 0 && (selectedUser?.metrics?.swimDeficit || 0) === 0 && (
+                        <div className="text-sm text-green-600">
+                          ✅ Đủ KPI tháng này!
                         </div>
                       )}
                     </div>
@@ -1321,86 +1618,331 @@ function AdminIntegratedDashboard() {
                     </div>
                   )}
 
-                  {/* Recent Tracklogs */}
+                  {/* Recent Tracklogs - Giống như Dashboard */}
                   <div className="bg-white border rounded-lg p-4">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="font-bold text-gray-700 flex items-center">
                         <FileText className="w-4 h-4 mr-2" />
-                        Tracklogs Gần Đây
+                        Tracklogs Tháng Hiện Tại
                       </h3>
                       <span className="text-sm text-gray-500">
                         {selectedUserActivities.length} hoạt động
                       </span>
                     </div>
                     
-                    <div className="space-y-3 max-h-96 overflow-y-auto">
-                      {selectedUserActivities.slice(0, 10).map((activity, idx) => (
-                        <div key={idx} className="border rounded-lg p-3 hover:bg-gray-50">
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <div className="flex items-center">
-                                <span className="mr-2">
-                                  {activity.type === 'Run' ? '🏃' : activity.type === 'Ride' ? '🚴' : '🏊'}
-                                </span>
-                                <span className="font-medium">{activity.name}</span>
-                                <span className="ml-2">{getActivityValidityBadge(activity)}</span>
+                    <div className="space-y-4 max-h-[600px] overflow-y-auto">
+                      {selectedUserActivities.map((activity, idx) => {
+                        // Lấy validation data
+                        const v = activity.validation || {};
+                        const startDate = new Date(activity.start_date);
+                        const startTimeStr = startDate.toLocaleString('vi-VN', { hour12: false });
+                        const movingTime = activity.moving_time || 0;
+                        const totalTimeStr = `${Math.floor(movingTime/60)}:${(movingTime%60).toString().padStart(2,'0')}`;
+                        const distanceKm = activity.distance ? activity.distance/1000 : 0;
+                        const type = (activity.type || activity.sport_type || '').toLowerCase();
+                        
+                        // Format pace
+                        let paceStr = '';
+                        if (type.includes('run') && v.pace > 0) {
+                          const paceMin = Math.floor(v.pace);
+                          const paceSec = Math.round((v.pace % 1) * 60);
+                          paceStr = `${paceMin}:${paceSec.toString().padStart(2,'0')} /km`;
+                        } else if (type.includes('swim') && distanceKm > 0) {
+                          const pacePer100m = movingTime / (activity.distance/100);
+                          const min = Math.floor(pacePer100m/60);
+                          const sec = Math.round(pacePer100m%60).toString().padStart(2,'0');
+                          paceStr = `${min}:${sec} /100m`;
+                        }
+                        
+                        const avgHr = activity.average_heartrate ? `${activity.average_heartrate} bpm` : '';
+                        
+                        // Icon và màu sắc
+                        let icon, borderColor;
+                        if (v.isValid === false) {
+                          borderColor = 'border-red-300 bg-red-50';
+                        } else if (v.quotaExceeded) {
+                          borderColor = 'border-orange-300 bg-orange-50';
+                        } else {
+                          borderColor = 'border-gray-200 hover:bg-gray-50';
+                        }
+                        
+                        if (type.includes('run')) {
+                          icon = '🏃‍♂️';
+                        } else if (type.includes('swim')) {
+                          icon = '🏊‍♂️';
+                        } else if (type.includes('ride') || type.includes('bike')) {
+                          icon = '🚴';
+                        } else {
+                          icon = '🏃';
+                        }
+                        
+                        return (
+                          <div key={activity.id || idx} className={`flex flex-col p-4 border rounded-lg ${borderColor}`}>
+                            {/* Main info row */}
+                            <div className="flex flex-col md:flex-row md:items-center gap-3">
+                              <div className="text-2xl">{icon}</div>
+                              <div className="flex-1">
+                                <h4 className="font-medium text-gray-900">{activity.name || 'Không có tên'}</h4>
+                                <div className="flex flex-wrap items-center text-sm text-gray-600 mt-1 gap-x-3 gap-y-1">
+                                  <span className="flex items-center"><Calendar className="w-3 h-3 mr-1" />{startTimeStr}</span>
+                                  <span>•</span>
+                                  <span className="flex items-center"><Timer className="w-3 h-3 mr-1" />{totalTimeStr} phút</span>
+                                  {paceStr && <><span>•</span><span>Pace: {paceStr}</span></>}
+                                  {(v.avgSpeed || 0) > 0 && <><span>•</span><span>TB: {v.avgSpeed} km/h</span></>}
+                                  {avgHr && <><span>•</span><span>HR: {avgHr}</span></>}
+                                </div>
                               </div>
-                              <div className="text-sm text-gray-600 mt-1">
-                                {formatDateTime(activity.start_date)}
+                              
+                              {/* Distance info */}
+                              <div className="text-right min-w-[120px]">
+                                <div className="font-bold text-lg">{distanceKm.toFixed(2)} km</div>
+                                {v.countedDistance !== undefined && Math.abs(v.countedDistance - distanceKm) > 0.01 && (
+                                  <div className={`text-sm ${v.countedDistance < distanceKm ? 'text-orange-600' : 'text-green-600'}`}>
+                                    → Tính: {v.countedDistance.toFixed(2)} km
+                                  </div>
+                                )}
+                                {v.notCounted && (
+                                  <div className="text-sm text-gray-500">Không tính KPI</div>
+                                )}
                               </div>
                             </div>
-                            <div className="text-right">
-                              <div className="font-bold">{(activity.distance / 1000).toFixed(2)} km</div>
-                              <div className="text-xs text-gray-500">
-                                Tính: {activity.countedDistance.toFixed(2)}km
-                              </div>
+                            
+                            {/* Validation & Quota details */}
+                            <div className="mt-3 pt-3 border-t border-gray-200 text-xs space-y-1">
+                              {/* Quota info */}
+                              {v.dailyQuota && (
+                                <div className="flex items-center text-gray-600">
+                                  <span className="mr-2">📊</span>
+                                  <span>Quota ngày: {v.dailyQuota} km</span>
+                                  {v.dayTotalBefore > 0 && (
+                                    <span className="ml-2 text-gray-500">(đã có {v.dayTotalBefore} km trước đó)</span>
+                                  )}
+                                </div>
+                              )}
+                              
+                              {/* Quota exceeded warning */}
+                              {v.quotaExceeded && (
+                                <div className="flex items-center text-orange-600">
+                                  <span className="mr-2">⚠️</span>
+                                  <span>Vượt quota ngày! Chỉ tính {v.countedDistance} km (dư {v.quotaRemainder} km không tính)</span>
+                                </div>
+                              )}
+                              
+                              {/* Validity status */}
+                              {v.isValid !== undefined && (
+                                v.isValid ? (
+                                  <div className="flex items-center text-green-600">
+                                    <span className="mr-2">✅</span>
+                                    <span>Hợp lệ - Tính vào KPI</span>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center text-red-600">
+                                    <span className="mr-2">🚫</span>
+                                    <span>Không hợp lệ - Không tính vào KPI</span>
+                                  </div>
+                                )
+                              )}
+                              
+                              {/* Issues list */}
+                              {v.issues && v.issues.length > 0 && (
+                                <div className="mt-2 p-2 bg-yellow-50 rounded text-yellow-800">
+                                  {v.issues.map((issue, i) => (
+                                    <div key={i} className="flex items-start">
+                                      <span>{issue}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           </div>
-                          
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2 text-xs">
-                            <div className="flex items-center">
-                              <Timer className="w-3 h-3 mr-1 text-gray-400" />
-                              <span>{Math.floor(activity.moving_time / 60)} phút</span>
-                            </div>
-                            <div className="flex items-center">
-                              <Gauge className="w-3 h-3 mr-1 text-gray-400" />
-                              <span>{activity.pace} phút/km</span>
-                            </div>
-                            <div className="flex items-center">
-                              <Heart className="w-3 h-3 mr-1 text-gray-400" />
-                              <span>{activity.average_heartrate} bpm</span>
-                            </div>
-                            <div className="flex items-center">
-                              <Target className="w-3 h-3 mr-1 text-gray-400" />
-                              <span>{activity.average_speed.toFixed(1)} km/h</span>
-                            </div>
-                          </div>
-                          
-                          {activity.quotaExceeded && (
-                            <div className="text-xs text-orange-600 mt-2">
-                              ⚠️ Vượt quota ngày ({activity.dailyQuota}km) - Chỉ tính {activity.countedDistance}km
-                            </div>
-                          )}
-                          
-                          {activity.flagged && (
-                            <div className="text-xs text-red-600 mt-2">
-                              🚫 Bị flag - Không tính vào KPI
-                            </div>
-                          )}
+                        );
+                      })}
+                      
+                      {selectedUserActivities.length === 0 && (
+                        <div className="text-center py-8 text-gray-500">
+                          <Activity className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                          <p>Chưa có hoạt động trong tháng này</p>
                         </div>
-                      ))}
+                      )}
                     </div>
-                    
-                    {selectedUserActivities.length > 10 && (
-                      <div className="text-center mt-4">
-                        <button className="text-blue-600 text-sm hover:text-blue-800">
-                          Xem thêm {selectedUserActivities.length - 10} tracklogs...
-                        </button>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        ) : activeTab === 'users' && viewMode === 'edit' ? (
+          /* Edit User View */
+          <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="bg-gradient-to-r from-yellow-50 to-orange-50 p-6 border-b">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <button
+                    onClick={handleCancelEdit}
+                    className="mr-4 text-gray-600 hover:text-gray-900"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <h2 className="text-2xl font-bold text-gray-900">
+                    Chỉnh sửa: {editingUser?.fullName || editingUser?.email}
+                  </h2>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6">
+              <form onSubmit={(e) => { e.preventDefault(); handleSaveEdit(); }} className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Họ tên */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Họ và tên
+                    </label>
+                    <input
+                      type="text"
+                      value={editForm.fullName}
+                      onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+
+                  {/* Email */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Email
+                    </label>
+                    <input
+                      type="email"
+                      value={editForm.email}
+                      disabled
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-100 text-gray-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Email không thể thay đổi</p>
+                  </div>
+
+                  {/* Phone */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Số điện thoại
+                    </label>
+                    <input
+                      type="tel"
+                      value={editForm.phone}
+                      onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+
+                  {/* Gender */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Giới tính
+                    </label>
+                    <select
+                      value={editForm.gender}
+                      onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="male">Nam</option>
+                      <option value="female">Nữ</option>
+                    </select>
+                  </div>
+
+                  {/* Birth Year */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Năm sinh
+                    </label>
+                    <input
+                      type="number"
+                      min="1950"
+                      max={new Date().getFullYear()}
+                      value={editForm.birthYear}
+                      onChange={(e) => setEditForm({ ...editForm, birthYear: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                  </div>
+
+                  {/* Status */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Trạng thái
+                    </label>
+                    <select
+                      value={editForm.status}
+                      onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="pending_approval">Chờ duyệt</option>
+                      <option value="approved">Đã duyệt</option>
+                      <option value="rejected">Từ chối</option>
+                    </select>
+                  </div>
+
+                  {/* Deposit */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Đặt cọc
+                    </label>
+                    <div className="flex items-center space-x-4">
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={editForm.depositPaid}
+                          onChange={(e) => setEditForm({ ...editForm, depositPaid: e.target.checked })}
+                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">Đã nộp tiền cọc</span>
+                      </label>
+                      <label className="flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={editForm.previousSeasonTransfer}
+                          onChange={(e) => setEditForm({ ...editForm, previousSeasonTransfer: e.target.checked })}
+                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">Chuyển từ mùa trước</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Role (Only Super Admin) */}
+                  {currentUserRole === 'super_admin' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Quyền hạn
+                      </label>
+                      <select
+                        value={editForm.role}
+                        onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      >
+                        <option value="user">User</option>
+                        <option value="admin">Admin</option>
+                        <option value="super_admin">Super Admin</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex justify-end space-x-4 pt-4 border-t">
+                  <button
+                    type="button"
+                    onClick={handleCancelEdit}
+                    className="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 flex items-center"
+                  >
+                    <X className="w-4 h-4 mr-2" />
+                    Hủy
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 flex items-center"
+                  >
+                    <Save className="w-4 h-4 mr-2" />
+                    Lưu thay đổi
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         ) : null}

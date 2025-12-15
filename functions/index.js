@@ -4,6 +4,7 @@
  */
 
 const {onRequest} = require("firebase-functions/v2/https");
+const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const {setGlobalOptions} = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 const axios = require("axios");
@@ -11,12 +12,150 @@ const axios = require("axios");
 // Khởi tạo Firebase Admin
 admin.initializeApp();
 const db = admin.firestore();
+const messaging = admin.messaging();
 
 // Giới hạn instances để kiểm soát chi phí
 setGlobalOptions({maxInstances: 10});
 
 // Verify token cho Strava webhook
 const STRAVA_VERIFY_TOKEN = "strava_verify_token_cua_shark_Ha";
+
+/**
+ * Gửi push notification đến user
+ * @param {Array} tokens - Mảng FCM tokens
+ * @param {string} title - Tiêu đề notification
+ * @param {string} body - Nội dung notification
+ * @param {Object} data - Data payload
+ */
+async function sendPushNotification(tokens, title, body, data = {}) {
+  if (!tokens || tokens.length === 0) {
+    console.log("No FCM tokens to send");
+    return;
+  }
+
+  const message = {
+    notification: {
+      title,
+      body,
+    },
+    data: {
+      ...data,
+      click_action: "OPEN_APP",
+    },
+    webpush: {
+      notification: {
+        icon: "/logo192.png",
+        badge: "/logo192.png",
+        vibrate: [200, 100, 200],
+      },
+      fcmOptions: {
+        link: "https://100ngay.web.app",
+      },
+    },
+    tokens: tokens,
+  };
+
+  try {
+    const response = await messaging.sendEachForMulticast(message);
+    console.log(`✅ Push sent: ${response.successCount} success, ${response.failureCount} failed`);
+
+    // Xử lý tokens không hợp lệ
+    if (response.failureCount > 0) {
+      response.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          console.log(`Token failed: ${tokens[idx]}`, resp.error?.message);
+        }
+      });
+    }
+  } catch (error) {
+    console.error("❌ Error sending push:", error);
+  }
+}
+
+/**
+ * Trigger: Gửi push notification khi có notification mới trong Firestore
+ */
+exports.onNotificationCreated = onDocumentCreated(
+    "notifications/{notificationId}",
+    async (event) => {
+      const notification = event.data?.data();
+      if (!notification) return;
+
+      console.log("📬 New notification created:", notification.title);
+
+      const {title, message, targetUsers, sendToAll} = notification;
+
+      try {
+        let tokens = [];
+
+        if (sendToAll) {
+          // Lấy tất cả FCM tokens từ users
+          const usersSnapshot = await db.collection("users")
+              .where("pushNotificationsEnabled", "==", true)
+              .get();
+
+          usersSnapshot.forEach((doc) => {
+            const userData = doc.data();
+            if (userData.fcmTokens && userData.fcmTokens.length > 0) {
+              tokens = tokens.concat(userData.fcmTokens);
+            }
+          });
+        } else if (targetUsers && targetUsers.length > 0) {
+          // Lấy tokens của các users được chọn
+          for (const userId of targetUsers) {
+            const userDoc = await db.collection("users").doc(userId).get();
+            if (userDoc.exists) {
+              const userData = userDoc.data();
+              if (userData.fcmTokens && userData.pushNotificationsEnabled) {
+                tokens = tokens.concat(userData.fcmTokens);
+              }
+            }
+          }
+        }
+
+        if (tokens.length > 0) {
+          // Loại bỏ tokens trùng lặp
+          tokens = [...new Set(tokens)];
+          await sendPushNotification(tokens, title, message, {
+            notificationId: event.params.notificationId,
+            type: notification.type || "admin",
+          });
+        }
+      } catch (error) {
+        console.error("Error processing notification:", error);
+      }
+    },
+);
+
+/**
+ * API: Gửi push notification thủ công
+ */
+exports.sendPush = onRequest(async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).send("");
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).send("Method not allowed");
+  }
+
+  const {tokens, title, body, data} = req.body;
+
+  if (!tokens || !title) {
+    return res.status(400).json({error: "Missing tokens or title"});
+  }
+
+  try {
+    await sendPushNotification(tokens, title, body || "", data || {});
+    return res.status(200).json({success: true});
+  } catch (error) {
+    return res.status(500).json({error: error.message});
+  }
+});
 
 /**
  * Strava Webhook - Xử lý cả GET (verification) và POST (events)
@@ -130,6 +269,17 @@ exports.stravaWebhook = onRequest(async (req, res) => {
             strava_activities: newActivities,
           });
           console.log("✅ Đã lưu activity mới cho user:", userId, "-", activity.name);
+
+          // 5. Gửi push notification cho user
+          if (userData.fcmTokens && userData.pushNotificationsEnabled) {
+            const distanceKm = (activity.distance / 1000).toFixed(2);
+            await sendPushNotification(
+                userData.fcmTokens,
+                "🏃 Activity mới đã ghi nhận!",
+                `${activity.name} - ${distanceKm}km`,
+                {type: "activity", activityId: String(activity.id)},
+            );
+          }
         } else {
           console.log("Activity đã tồn tại, bỏ qua");
         }

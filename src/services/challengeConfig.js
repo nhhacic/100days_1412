@@ -174,6 +174,388 @@ class ChallengeConfig {
       total: (runDeficit * this.config.penalties.run) + (swimDeficit * this.config.penalties.swim)
     };
   }
+
+  /**
+   * Tính tiền phạt với quy đổi thông minh
+   * Nếu dư môn này sẽ quy đổi sang bù cho môn kia
+   */
+  calculatePenaltyWithConversion(runDistance, swimDistance, gender) {
+    const target = this.config.monthlyTargets[gender];
+    
+    // Tính thừa/thiếu ban đầu
+    let runSurplus = runDistance - target.run;  // Dương = thừa, Âm = thiếu
+    let swimSurplus = swimDistance - target.swim;
+    
+    // Kết quả sau quy đổi
+    let finalRunDeficit = 0;
+    let finalSwimDeficit = 0;
+    let conversionDetails = {
+      runSurplusUsed: 0,
+      swimSurplusUsed: 0,
+      runFromSwim: 0,
+      swimFromRun: 0
+    };
+    
+    // Nếu cả 2 đều đủ hoặc thừa
+    if (runSurplus >= 0 && swimSurplus >= 0) {
+      return {
+        originalRunDeficit: 0,
+        originalSwimDeficit: 0,
+        finalRunDeficit: 0,
+        finalSwimDeficit: 0,
+        runPenalty: 0,
+        swimPenalty: 0,
+        totalPenalty: 0,
+        conversion: conversionDetails,
+        message: '✅ Đã hoàn thành KPI cả 2 môn!'
+      };
+    }
+    
+    // Nếu thiếu chạy nhưng dư bơi -> quy đổi bơi sang chạy
+    if (runSurplus < 0 && swimSurplus > 0) {
+      const runNeeded = Math.abs(runSurplus);
+      // 1km bơi = 2km chạy
+      const runFromSwim = swimSurplus * this.config.conversion.swimToRun;
+      
+      if (runFromSwim >= runNeeded) {
+        // Dư bơi đủ bù thiếu chạy
+        conversionDetails.swimSurplusUsed = runNeeded / this.config.conversion.swimToRun;
+        conversionDetails.runFromSwim = runNeeded;
+        finalRunDeficit = 0;
+      } else {
+        // Dư bơi không đủ bù hết
+        conversionDetails.swimSurplusUsed = swimSurplus;
+        conversionDetails.runFromSwim = runFromSwim;
+        finalRunDeficit = runNeeded - runFromSwim;
+      }
+      finalSwimDeficit = 0;
+    }
+    // Nếu thiếu bơi nhưng dư chạy -> quy đổi chạy sang bơi
+    else if (swimSurplus < 0 && runSurplus > 0) {
+      const swimNeeded = Math.abs(swimSurplus);
+      // 12.5km chạy = 1km bơi
+      const swimFromRun = runSurplus / this.config.conversion.runToSwim;
+      
+      if (swimFromRun >= swimNeeded) {
+        // Dư chạy đủ bù thiếu bơi
+        conversionDetails.runSurplusUsed = swimNeeded * this.config.conversion.runToSwim;
+        conversionDetails.swimFromRun = swimNeeded;
+        finalSwimDeficit = 0;
+      } else {
+        // Dư chạy không đủ bù hết
+        conversionDetails.runSurplusUsed = runSurplus;
+        conversionDetails.swimFromRun = swimFromRun;
+        finalSwimDeficit = swimNeeded - swimFromRun;
+      }
+      finalRunDeficit = 0;
+    }
+    // Cả 2 đều thiếu
+    else {
+      finalRunDeficit = Math.abs(runSurplus);
+      finalSwimDeficit = Math.abs(swimSurplus);
+    }
+    
+    const runPenalty = finalRunDeficit * this.config.penalties.run;
+    const swimPenalty = finalSwimDeficit * this.config.penalties.swim;
+    
+    return {
+      originalRunDeficit: Math.max(0, -runSurplus),
+      originalSwimDeficit: Math.max(0, -swimSurplus),
+      finalRunDeficit: parseFloat(finalRunDeficit.toFixed(2)),
+      finalSwimDeficit: parseFloat(finalSwimDeficit.toFixed(2)),
+      runPenalty,
+      swimPenalty,
+      totalPenalty: runPenalty + swimPenalty,
+      conversion: conversionDetails,
+      message: this.getPenaltyMessage(finalRunDeficit, finalSwimDeficit, conversionDetails)
+    };
+  }
+  
+  getPenaltyMessage(runDef, swimDef, conv) {
+    let msg = [];
+    if (conv.runFromSwim > 0) {
+      msg.push(`🔄 Quy đổi ${conv.swimSurplusUsed.toFixed(2)}km bơi dư → ${conv.runFromSwim.toFixed(2)}km chạy`);
+    }
+    if (conv.swimFromRun > 0) {
+      msg.push(`🔄 Quy đổi ${conv.runSurplusUsed.toFixed(2)}km chạy dư → ${conv.swimFromRun.toFixed(2)}km bơi`);
+    }
+    if (runDef > 0) msg.push(`⚠️ Còn thiếu ${runDef.toFixed(2)}km chạy`);
+    if (swimDef > 0) msg.push(`⚠️ Còn thiếu ${swimDef.toFixed(2)}km bơi`);
+    if (runDef === 0 && swimDef === 0) msg.push('✅ Đủ KPI sau quy đổi!');
+    return msg.join('\n');
+  }
+
+  /**
+   * Kiểm tra tính hợp lệ của 1 activity
+   * Returns: { isValid, issues[], countedDistance, pace, expectedMinTime, expectedMaxTime }
+   */
+  validateActivity(activity) {
+    const issues = [];
+    const type = (activity.type?.toLowerCase() || activity.sport_type?.toLowerCase() || '').toLowerCase();
+    const distanceKm = activity.distance / 1000;
+    const movingTimeSec = activity.moving_time || 0;
+    const elapsedTimeSec = activity.elapsed_time || 0;
+    const movingTimeMin = movingTimeSec / 60;
+    const activityDate = new Date(activity.start_date);
+    
+    let isValid = true;
+    let pace = 0; // phút/km
+    let avgSpeed = 0; // km/h
+    
+    // Tính pace và speed
+    if (movingTimeSec > 0 && distanceKm > 0) {
+      pace = movingTimeMin / distanceKm;
+      avgSpeed = (distanceKm / movingTimeSec) * 3600;
+    }
+    
+    // Kiểm tra pace hợp lý cho từng loại hoạt động
+    if (type.includes('run')) {
+      // Pace chạy hợp lý: 3-15 phút/km
+      // Elite runner ~3 phút/km, người mới ~12-15 phút/km
+      if (pace > 0 && pace < 3) {
+        issues.push(`🚫 Pace quá nhanh (${pace.toFixed(2)} phút/km < 3 phút/km) - Có thể đạp xe?`);
+        isValid = false;
+      }
+      if (pace > 15) {
+        issues.push(`⚠️ Pace rất chậm (${pace.toFixed(2)} phút/km > 15 phút/km) - Có thể đang đi bộ`);
+        // Không invalidate, chỉ cảnh báo
+      }
+      // Tốc độ tối đa hợp lý cho chạy: 20 km/h
+      if (avgSpeed > 20) {
+        issues.push(`🚫 Tốc độ TB quá cao (${avgSpeed.toFixed(1)} km/h > 20 km/h)`);
+        isValid = false;
+      }
+    }
+    
+    if (type.includes('swim')) {
+      // Pace bơi hợp lý: 1.5-5 phút/100m = 15-50 phút/km
+      if (pace > 0 && pace < 10) {
+        issues.push(`🚫 Pace bơi quá nhanh (${pace.toFixed(2)} phút/km < 10 phút/km)`);
+        isValid = false;
+      }
+      if (pace > 60) {
+        issues.push(`⚠️ Pace bơi rất chậm (${pace.toFixed(2)} phút/km)`);
+      }
+    }
+    
+    // Kiểm tra thời gian elapsed vs moving (nếu chênh lệch quá lớn có thể bất thường)
+    if (elapsedTimeSec > 0 && movingTimeSec > 0) {
+      const pauseRatio = (elapsedTimeSec - movingTimeSec) / elapsedTimeSec;
+      if (pauseRatio > 0.5) {
+        issues.push(`⚠️ Tạm dừng nhiều (${(pauseRatio * 100).toFixed(0)}% thời gian)`);
+      }
+    }
+    
+    // Kiểm tra khoảng cách tối thiểu
+    if (distanceKm < 0.5) {
+      issues.push(`⚠️ Quãng đường quá ngắn (${distanceKm.toFixed(2)}km < 0.5km)`);
+    }
+    
+    // Áp dụng daily quota
+    const dailyLimit = this.getDailyLimit(type.includes('run') ? 'run' : 'swim', activityDate);
+    let countedDistance = distanceKm;
+    let quotaExceeded = false;
+    
+    // Lưu ý: Daily quota phải được tính ở level tổng hợp (tất cả activities trong ngày)
+    // Ở đây chỉ lưu thông tin limit để hiển thị
+    
+    return {
+      isValid,
+      issues,
+      originalDistance: parseFloat(distanceKm.toFixed(2)),
+      countedDistance: parseFloat(countedDistance.toFixed(2)),
+      pace: parseFloat(pace.toFixed(2)),
+      avgSpeed: parseFloat(avgSpeed.toFixed(1)),
+      movingTimeMin: parseFloat(movingTimeMin.toFixed(1)),
+      dailyLimit,
+      activityType: type.includes('run') ? 'run' : type.includes('swim') ? 'swim' : 'other'
+    };
+  }
+
+  /**
+   * Xử lý tất cả activities với daily quota
+   * Group theo ngày, áp dụng quota, đánh dấu excess
+   */
+  processActivitiesWithQuota(activities, gender) {
+    const target = this.config.monthlyTargets[gender] || this.config.monthlyTargets.male;
+    
+    // Nếu không có activities, trả về default
+    if (!activities || activities.length === 0) {
+      return {
+        activities: [],
+        summary: {
+          totalRunCounted: 0,
+          totalSwimCounted: 0,
+          runTarget: target.run,
+          swimTarget: target.swim,
+          runProgress: 0,
+          swimProgress: 0,
+          originalRunDeficit: target.run,
+          originalSwimDeficit: target.swim,
+          finalRunDeficit: target.run,
+          finalSwimDeficit: target.swim,
+          runPenalty: target.run * this.config.penalties.run,
+          swimPenalty: target.swim * this.config.penalties.swim,
+          totalPenalty: (target.run * this.config.penalties.run) + (target.swim * this.config.penalties.swim),
+          conversion: { runSurplusUsed: 0, swimSurplusUsed: 0, runFromSwim: 0, swimFromRun: 0 },
+          message: `⚠️ Còn thiếu ${target.run}km chạy\n⚠️ Còn thiếu ${target.swim}km bơi`
+        }
+      };
+    }
+    
+    // Group activities by date (dùng local date, không phải UTC)
+    const byDate = {};
+    activities.forEach(activity => {
+      try {
+        // Dùng local date thay vì UTC để tránh timezone issues
+        const actDate = new Date(activity.start_date);
+        const dateKey = `${actDate.getFullYear()}-${String(actDate.getMonth() + 1).padStart(2, '0')}-${String(actDate.getDate()).padStart(2, '0')}`;
+        
+        if (!byDate[dateKey]) {
+          byDate[dateKey] = { run: [], swim: [], other: [] };
+        }
+        
+        const validation = this.validateActivity(activity);
+        const enrichedActivity = {
+          ...activity,
+          validation,
+          dateKey
+        };
+        
+        if (validation.activityType === 'run') {
+          byDate[dateKey].run.push(enrichedActivity);
+        } else if (validation.activityType === 'swim') {
+          byDate[dateKey].swim.push(enrichedActivity);
+        } else {
+          byDate[dateKey].other.push(enrichedActivity);
+        }
+      } catch (err) {
+        console.warn('Error processing activity:', activity, err);
+      }
+    });
+    
+    // Apply daily quota
+    let totalRunCounted = 0;
+    let totalSwimCounted = 0;
+    const processedActivities = [];
+
+    Object.keys(byDate).sort().forEach(dateKey => {
+      const dayActivities = byDate[dateKey];
+      
+      // Parse dateKey as local date (not UTC) để tránh timezone issues
+      const [year, month, dayOfMonth] = dateKey.split('-').map(Number);
+      const date = new Date(year, month - 1, dayOfMonth);
+      
+      const runLimit = this.getDailyLimit('run', dateKey);
+      const swimLimit = this.getDailyLimit('swim', dateKey);
+      
+      // Debug log
+      console.log(`[Quota Debug] Date: ${dateKey}, Day: ${date.getDay()}, isWeekday: ${this.isWeekday(dateKey)}, swimLimit: ${swimLimit}, runLimit: ${runLimit}`);
+      
+      let dayRunTotal = 0;
+      let daySwimTotal = 0;
+      
+      // Sort activities by start_date ASCENDING để xử lý theo thứ tự thời gian trong ngày
+      dayActivities.run.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+      dayActivities.swim.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+      
+      // Process run activities
+      dayActivities.run.forEach(activity => {
+        const originalDist = activity.validation.originalDistance;
+        let countedDist = originalDist;
+        let quotaExceeded = false;
+        let quotaRemainder = 0;
+        
+        if (dayRunTotal + originalDist > runLimit) {
+          countedDist = Math.max(0, runLimit - dayRunTotal);
+          quotaExceeded = true;
+          quotaRemainder = originalDist - countedDist;
+        }
+        
+        // Chỉ tính nếu valid
+        if (activity.validation.isValid) {
+          dayRunTotal += countedDist;
+          totalRunCounted += countedDist;
+        }
+        
+        processedActivities.push({
+          ...activity,
+          validation: {
+            ...activity.validation,
+            countedDistance: activity.validation.isValid ? parseFloat(countedDist.toFixed(2)) : 0,
+            quotaExceeded,
+            quotaRemainder: parseFloat(quotaRemainder.toFixed(2)),
+            dailyQuota: runLimit,
+            dayTotalBefore: parseFloat((dayRunTotal - countedDist).toFixed(2))
+          }
+        });
+      });
+      
+      // Process swim activities
+      dayActivities.swim.forEach(activity => {
+        const originalDist = activity.validation.originalDistance;
+        let countedDist = originalDist;
+        let quotaExceeded = false;
+        let quotaRemainder = 0;
+        
+        if (daySwimTotal + originalDist > swimLimit) {
+          countedDist = Math.max(0, swimLimit - daySwimTotal);
+          quotaExceeded = true;
+          quotaRemainder = originalDist - countedDist;
+        }
+        
+        if (activity.validation.isValid) {
+          daySwimTotal += countedDist;
+          totalSwimCounted += countedDist;
+        }
+        
+        processedActivities.push({
+          ...activity,
+          validation: {
+            ...activity.validation,
+            countedDistance: activity.validation.isValid ? parseFloat(countedDist.toFixed(2)) : 0,
+            quotaExceeded,
+            quotaRemainder: parseFloat(quotaRemainder.toFixed(2)),
+            dailyQuota: swimLimit,
+            dayTotalBefore: parseFloat((daySwimTotal - countedDist).toFixed(2))
+          }
+        });
+      });
+      
+      // Other activities (không tính KPI)
+      dayActivities.other.forEach(activity => {
+        processedActivities.push({
+          ...activity,
+          validation: {
+            ...activity.validation,
+            countedDistance: 0,
+            quotaExceeded: false,
+            notCounted: true,
+            reason: 'Loại hoạt động không tính KPI'
+          }
+        });
+      });
+    });
+    
+    // Sort by date descending
+    processedActivities.sort((a, b) => new Date(b.start_date) - new Date(a.start_date));
+    
+    // Calculate penalty with conversion
+    const penaltyResult = this.calculatePenaltyWithConversion(totalRunCounted, totalSwimCounted, gender);
+    
+    return {
+      activities: processedActivities,
+      summary: {
+        totalRunCounted: parseFloat(totalRunCounted.toFixed(2)),
+        totalSwimCounted: parseFloat(totalSwimCounted.toFixed(2)),
+        runTarget: target.run,
+        swimTarget: target.swim,
+        runProgress: parseFloat(((totalRunCounted / target.run) * 100).toFixed(1)),
+        swimProgress: parseFloat(((totalSwimCounted / target.swim) * 100).toFixed(1)),
+        ...penaltyResult
+      }
+    };
+  }
   
   // Kiểm tra có trong thời gian 10 ngày cuối không
   isFinalChallenge(date) {
@@ -190,7 +572,16 @@ class ChallengeConfig {
   }
   
   isWeekday(date) {
-    const day = new Date(date).getDay();
+    // Nếu date là string YYYY-MM-DD, parse manually để tránh timezone issues
+    let day;
+    if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      // Parse YYYY-MM-DD string as local date (not UTC)
+      const [year, month, dayOfMonth] = date.split('-').map(Number);
+      day = new Date(year, month - 1, dayOfMonth).getDay();
+    } else {
+      day = new Date(date).getDay();
+    }
+    // 0 = Sunday, 1-5 = Mon-Fri, 6 = Saturday
     return day >= 1 && day <= 5;
   }
   

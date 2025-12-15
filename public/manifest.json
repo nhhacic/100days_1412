@@ -1,0 +1,47 @@
+{
+  "name": "Challenge 100 Ngày",
+  "short_name": "100 Ngày",
+  "description": "Theo dõi thử thách chạy bộ & bơi lội 100 ngày",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#4F46E5",
+  "theme_color": "#4F46E5",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/logo192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshot1.png",
+      "sizes": "1080x1920",
+      "type": "image/png",
+      "form_factor": "narrow"
+    }
+  ],
+  "categories": ["fitness", "health", "sports"],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "url": "/#/dashboard",
+      "description": "Xem tiến độ của bạn"
+    },
+    {
+      "name": "Đồng bộ Strava",
+      "url": "/#/dashboard?sync=true",
+      "description": "Đồng bộ dữ liệu từ Strava"
+    }
+  ]
+}
