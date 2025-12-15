@@ -4,6 +4,7 @@ import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/
 import { doc, setDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
 import { checkEmailExists } from '../services/emailChecker';
+import notificationService from '../services/notificationService';
 import { 
   UserPlus, Mail, Lock, User, Calendar, 
   Activity, AlertCircle, ArrowLeft, CheckCircle,
@@ -221,6 +222,12 @@ function Register() {
         agreedAt: new Date()
       });
 
+      // Gửi thông báo cho admin
+      await notificationService.notifyAdminsNewRegistration({
+        userName: formData.fullName,
+        userEmail: formData.email
+      });
+
       setStep(4);
 
     } catch (err) {
@@ -285,42 +292,47 @@ function Register() {
   const emailStatus = getEmailStatusText();
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-green-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl p-8 max-w-2xl w-full">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-r from-blue-600 to-green-500 rounded-full mb-4">
-            <UserPlus className="w-8 h-8 text-white" />
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-green-50 p-3 sm:p-4">
+      <div className="bg-white rounded-xl sm:rounded-2xl shadow-xl p-4 sm:p-6 md:p-8 max-w-2xl w-full">
+        <div className="text-center mb-6 sm:mb-8">
+          <div className="inline-flex items-center justify-center w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-r from-blue-600 to-green-500 rounded-full mb-3 sm:mb-4">
+            <UserPlus className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">
+          <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900">
             Đăng Ký Tham Gia Challenge
           </h1>
-          <p className="text-gray-600 mt-2">
+          <p className="text-gray-600 mt-1 sm:mt-2 text-sm sm:text-base">
             Hoàn thành 4 bước để bắt đầu hành trình 100 ngày
           </p>
         </div>
 
-        <div className="flex items-center justify-between mb-8">
+        {/* Responsive steps indicator */}
+        <div className="flex items-center justify-between mb-6 sm:mb-8">
           {[1, 2, 3, 4].map((stepNum) => (
             <div key={stepNum} className="flex flex-col items-center">
               <div className={`
-                w-10 h-10 rounded-full flex items-center justify-center
+                w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center text-sm sm:text-base
                 ${step >= stepNum 
                   ? 'bg-blue-600 text-white' 
                   : 'bg-gray-200 text-gray-500'
                 }
-                ${step === stepNum ? 'ring-4 ring-blue-200' : ''}
+                ${step === stepNum ? 'ring-2 sm:ring-4 ring-blue-200' : ''}
               `}>
                 {step > stepNum ? (
-                  <CheckCircle className="w-6 h-6" />
+                  <CheckCircle className="w-4 h-4 sm:w-6 sm:h-6" />
                 ) : (
                   <span className="font-bold">{stepNum}</span>
                 )}
               </div>
-              <span className="text-sm mt-2 text-gray-600">
-                {stepNum === 1 && 'Tài khoản'}
-                {stepNum === 2 && 'Thông tin'}
-                {stepNum === 3 && 'Tiền cọc'}
-                {stepNum === 4 && 'Hoàn tất'}
+              <span className="text-xs sm:text-sm mt-1 sm:mt-2 text-gray-600 text-center">
+                {stepNum === 1 && <span className="hidden sm:inline">Tài khoản</span>}
+                {stepNum === 1 && <span className="sm:hidden">TK</span>}
+                {stepNum === 2 && <span className="hidden sm:inline">Thông tin</span>}
+                {stepNum === 2 && <span className="sm:hidden">Info</span>}
+                {stepNum === 3 && <span className="hidden sm:inline">Tiền cọc</span>}
+                {stepNum === 3 && <span className="sm:hidden">Cọc</span>}
+                {stepNum === 4 && <span className="hidden sm:inline">Hoàn tất</span>}
+                {stepNum === 4 && <span className="sm:hidden">Done</span>}
               </span>
             </div>
           ))}
@@ -544,35 +556,6 @@ function Register() {
               <p className="text-xs text-gray-500 mt-1">
                 Mặc định: 01/01/2026 - Bạn có thể chọn ngày muộn hơn nếu tham gia sau
               </p>
-            </div>
-
-            {/* Strava Connection - Optional */}
-            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-              <h3 className="font-medium text-blue-800 mb-2">Kết nối Strava (Khuyến khích)</h3>
-              <p className="text-blue-700 mb-3 text-sm">
-                Bạn có thể kết nối Strava ngay hoặc để sau khi được admin duyệt.
-              </p>
-              <button
-                type="button"
-                onClick={connectStrava}
-                className={`px-4 py-2 rounded-lg font-medium flex items-center ${
-                  stravaConnected
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-                }`}
-              >
-                {stravaConnected ? (
-                  <>
-                    <Check className="w-4 h-4 mr-2" />
-                    Đã kết nối Strava
-                  </>
-                ) : (
-                  <>
-                    <Activity className="w-4 h-4 mr-2" />
-                    Kết nối với Strava (Tùy chọn)
-                  </>
-                )}
-              </button>
             </div>
 
             <div className="flex justify-between pt-4">

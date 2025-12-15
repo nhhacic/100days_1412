@@ -39,6 +39,8 @@ function AdminDashboard() {
   const [showDepositImages, setShowDepositImages] = useState({});
   const [selectedUsers, setSelectedUsers] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
+  const [userEventParticipations, setUserEventParticipations] = useState([]);
+  const [loadingParticipations, setLoadingParticipations] = useState(false);
   const itemsPerPage = 15;
 
   useEffect(() => {
@@ -49,6 +51,16 @@ function AdminDashboard() {
   useEffect(() => {
     applyFilters();
   }, [allUsers, filter, search]);
+
+  useEffect(() => {
+    if (selectedUser) {
+      console.log('🔵 Selected user changed, loading participations for:', selectedUser.id, selectedUser.email);
+      loadUserEventParticipations(selectedUser.id);
+    } else {
+      console.log('🔴 No user selected, clearing participations');
+      setUserEventParticipations([]);
+    }
+  }, [selectedUser]);
 
   const loadCurrentUser = async () => {
     try {
@@ -61,6 +73,64 @@ function AdminDashboard() {
       }
     } catch (error) {
       console.error('Error loading current user:', error);
+    }
+  };
+
+  const loadUserEventParticipations = async (userId) => {
+    setLoadingParticipations(true);
+    try {
+      console.log('🔍 Loading event participations for user:', userId);
+      // Load event participations (không dùng orderBy để tránh lỗi composite index)
+      const participationsQuery = query(
+        collection(db, 'event_participations'),
+        where('userId', '==', userId)
+      );
+      const participationsSnapshot = await getDocs(participationsQuery);
+      console.log('📊 Found participations:', participationsSnapshot.size);
+      const participationsData = [];
+      
+      // Load event details for each participation
+      for (const docSnap of participationsSnapshot.docs) {
+        const data = docSnap.data();
+        console.log('📝 Processing participation:', docSnap.id, data);
+        let eventData = null;
+        
+        // Load event details
+        if (data.eventId) {
+          try {
+            const eventDoc = await getDoc(doc(db, 'special_events', data.eventId));
+            if (eventDoc.exists()) {
+              eventData = { id: eventDoc.id, ...eventDoc.data() };
+              console.log('✅ Loaded event:', eventData.name);
+            } else {
+              console.log('⚠️ Event not found:', data.eventId);
+            }
+          } catch (err) {
+            console.error('❌ Error loading event:', err);
+          }
+        } else {
+          console.log('⚠️ No eventId in participation');
+        }
+        
+        participationsData.push({
+          id: docSnap.id,
+          ...data,
+          linkedAt: data.linkedAt?.toDate?.() || new Date(data.linkedAt),
+          activityDate: data.activityDate?.toDate?.() || (data.activityDate ? new Date(data.activityDate) : null),
+          event: eventData
+        });
+      }
+      
+      // Sort by linkedAt desc (client-side)
+      participationsData.sort((a, b) => b.linkedAt - a.linkedAt);
+      
+      console.log('✅ Loaded participations data:', participationsData);
+      setUserEventParticipations(participationsData);
+    } catch (error) {
+      console.error('❌ Error loading user event participations:', error);
+      setUserEventParticipations([]);
+    } finally {
+      setLoadingParticipations(false);
     }
   };
 
@@ -703,6 +773,9 @@ function AdminDashboard() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Phạt
                       </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Chi tiết
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
@@ -814,6 +887,15 @@ function AdminDashboard() {
                               </div>
                             )}
                           </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <button
+                            onClick={() => setSelectedUser(user)}
+                            className="flex items-center text-blue-600 hover:text-blue-800 text-sm font-medium"
+                          >
+                            <Eye className="w-4 h-4 mr-2" />
+                            Xem chi tiết
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1046,6 +1128,108 @@ function AdminDashboard() {
                       <div className="text-xs text-gray-500">Tháng này</div>
                     </div>
                   </div>
+                </div>
+
+                {/* Event Participations */}
+                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 p-4 rounded-lg border border-purple-200">
+                  <h3 className="font-bold text-purple-800 mb-3 flex items-center">
+                    <Award className="w-5 h-5 mr-2" />
+                    Tracklogs Sự Kiện Đặc Biệt ({userEventParticipations.length})
+                  </h3>
+                  
+                  {loadingParticipations ? (
+                    <div className="text-center py-4">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500 mx-auto"></div>
+                      <p className="mt-2 text-sm text-purple-600">Đang tải...</p>
+                    </div>
+                  ) : userEventParticipations.length === 0 ? (
+                    <div className="text-center py-6 bg-white rounded-lg border border-dashed border-purple-200">
+                      <Award className="w-12 h-12 text-purple-300 mx-auto mb-2" />
+                      <p className="text-purple-600 text-sm">Chưa có tracklog sự kiện nào</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-64 overflow-y-auto">
+                      {userEventParticipations.map((participation) => (
+                        <div key={participation.id} className="bg-white p-3 rounded-lg border border-purple-100 hover:border-purple-300 transition">
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              {participation.event ? (
+                                <div className="flex items-center mb-1">
+                                  {participation.event.eventType === 'charity_event' ? (
+                                    <Star className="w-4 h-4 text-yellow-500 mr-1.5" />
+                                  ) : (
+                                    <Award className="w-4 h-4 text-blue-500 mr-1.5" />
+                                  )}
+                                  <span className="font-semibold text-purple-900 text-sm">
+                                    {participation.event.name || participation.eventName || 'Sự kiện'}
+                                  </span>
+                                </div>
+                              ) : participation.eventName ? (
+                                <div className="flex items-center mb-1">
+                                  <Award className="w-4 h-4 text-gray-500 mr-1.5" />
+                                  <span className="font-semibold text-gray-700 text-sm">
+                                    {participation.eventName}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="text-sm font-medium text-gray-500 mb-1">
+                                  <Award className="w-4 h-4 inline mr-1" />
+                                  Sự kiện đã bị xóa
+                                </div>
+                              )}
+                              
+                              <div className="text-xs text-gray-600 space-y-0.5">
+                                <div className="flex items-center">
+                                  {participation.activityType?.toLowerCase().includes('run') ? (
+                                    <Footprints className="w-3 h-3 mr-1 text-orange-500" />
+                                  ) : participation.activityType?.toLowerCase().includes('swim') ? (
+                                    <Waves className="w-3 h-3 mr-1 text-blue-500" />
+                                  ) : (
+                                    <Activity className="w-3 h-3 mr-1 text-gray-500" />
+                                  )}
+                                  <span>{participation.activityName || 'N/A'}</span>
+                                </div>
+                                <div className="flex items-center text-purple-600">
+                                  <span className="font-semibold">
+                                    {(participation.distance / 1000).toFixed(2)} km
+                                  </span>
+                                  {participation.movingTime && (
+                                    <span className="ml-2 text-gray-500">
+                                      • {Math.floor(participation.movingTime / 60)} phút
+                                    </span>
+                                  )}
+                                </div>
+                                {participation.activityDate && (
+                                  <div className="text-gray-500">
+                                    📅 {participation.activityDate.toLocaleDateString('vi-VN')}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            
+                            <div className="text-right ml-3">
+                              {participation.activityId && (
+                                <a
+                                  href={`https://www.strava.com/activities/${participation.activityId}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-orange-600 hover:text-orange-700 flex items-center justify-end mb-1"
+                                >
+                                  Xem Strava
+                                  <svg className="w-3 h-3 ml-1" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0l-7 13.828h4.169"/>
+                                  </svg>
+                                </a>
+                              )}
+                              <div className="text-[10px] text-gray-400">
+                                {participation.linkedAt?.toLocaleDateString('vi-VN')}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Financial Info */}

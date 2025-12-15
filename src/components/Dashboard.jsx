@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { auth, db, presenceService } from '../services/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import stravaService from '../services/stravaService';
 import challengeConfig from '../services/challengeConfig';
 import { 
@@ -9,11 +9,16 @@ import {
   Target, BarChart3, LogOut, RefreshCw, User,
   AlertCircle, Heart, Waves, Settings, Bike,
   Shield, Clock, CheckCircle, XCircle, Users,
-  FileText, Award, Flame, Home, ArrowUp, Footprints
+  FileText, Award, Flame, Home, ArrowUp, Footprints, Edit
 } from 'lucide-react';
 import logo from '/logo.png?url';
 import NotificationBell from './NotificationBell';
 import PushNotificationToggle from './PushNotificationToggle';
+import KPIExceptionRequest from './KPIExceptionRequest';
+import EventActivitySelector from './EventActivitySelector';
+import UserProfile from './UserProfile';
+import UploadBillModal from './UploadBillModal';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 
 function Dashboard({ user }) {
@@ -24,12 +29,79 @@ function Dashboard({ user }) {
   const [config, setConfig] = useState(challengeConfig.getConfig());
   const [userData, setUserData] = useState(null);
   const [activities, setActivities] = useState([]);
+  // State cho event participations (sự kiện đặc biệt)
+  const [eventParticipations, setEventParticipations] = useState([]);
+  // State cho cài đặt sự kiện mặc định (bật/tắt)
+  const [disabledDefaultEvents, setDisabledDefaultEvents] = useState({});
   // State cho accordion tháng
   const [openMonth, setOpenMonth] = useState(null);
   // State cho auto-refresh
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  // State cho KPI Exception modal
+  const [showExceptionModal, setShowExceptionModal] = useState(false);
   // State cho nút scroll to top
   const [showScrollTop, setShowScrollTop] = useState(false);
+  // State cho Profile modal
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  // State cho modal upload bill
+  const [showUploadBill, setShowUploadBill] = useState(false);
+  const [uploadBillInfo, setUploadBillInfo] = useState(null); // {month, year, amount}
+  const [penaltyPayments, setPenaltyPayments] = useState([]);
+
+  // Load event participations của user
+  const loadEventParticipations = async () => {
+    if (!user?.uid) return;
+    try {
+      const q = query(
+        collection(db, 'event_participations'),
+        where('userId', '==', user.uid)
+      );
+      const snapshot = await getDocs(q);
+      const participations = [];
+      snapshot.forEach(docSnap => {
+        participations.push({
+          id: docSnap.id,
+          ...docSnap.data()
+        });
+      });
+      console.log('[Dashboard] Loaded event participations:', participations);
+      setEventParticipations(participations);
+    } catch (err) {
+      console.error('Error loading event participations:', err);
+    }
+  };
+
+  // Load cài đặt sự kiện mặc định từ Firestore
+  const loadDefaultEventsSettings = async () => {
+    try {
+      const docRef = doc(db, 'settings', 'default_events');
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setDisabledDefaultEvents(docSnap.data().events || {});
+      }
+    } catch (err) {
+      console.error('Error loading default events settings:', err);
+    }
+  };
+
+  // Load penalty payments của user
+  const loadPenaltyPayments = async () => {
+    if (!user?.uid) return;
+    try {
+      const q = query(
+        collection(db, 'penalty_payments'),
+        where('userId', '==', user.uid)
+      );
+      const snapshot = await getDocs(q);
+      const payments = [];
+      snapshot.forEach(docSnap => {
+        payments.push({ id: docSnap.id, ...docSnap.data() });
+      });
+      setPenaltyPayments(payments);
+    } catch (err) {
+      console.error('Error loading penalty payments:', err);
+    }
+  };
 
   useEffect(() => {
     const loadUserData = async () => {
@@ -65,6 +137,7 @@ function Dashboard({ user }) {
     };
 
     loadUserData();
+    loadEventParticipations();
     syncStravaTokens();
     setConfig(challengeConfig.getConfig());
 
@@ -142,31 +215,6 @@ function Dashboard({ user }) {
       const stravaActivities = await stravaService.getActivities();
       setActivities(stravaActivities || []);
       if (stravaActivities && stravaActivities.length > 0) {
-        await stravaService.saveActivitiesToFirebase(user.uid, stravaActivities);
-      }
-      alert('✅ Đã đồng bộ dữ liệu từ Strava!');
-    } catch (error) {
-      alert('❌ Lỗi khi đồng bộ dữ liệu');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // State để lưu processed activities với quota và validation
-  const [processedData, setProcessedData] = useState(null);
-  const [metrics, setMetrics] = useState({
-    runDistance: 0,
-    swimDistance: 0,
-    totalDistance: 0,
-    activityCount: 0,
-    kpiProgress: { run: 0, swim: 0 },
-    penalty: 0,
-    runDeficit: 0,
-    swimDeficit: 0,
-    penaltyDetails: null
-  });
-
-  // Recalculate khi activities hoặc userData thay đổi
   useEffect(() => {
     if (!userData || activities.length === 0) {
       setMetrics({
@@ -192,8 +240,8 @@ function Dashboard({ user }) {
       return activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear;
     });
 
-    // Sử dụng hàm mới để xử lý với quota và validation
-    const result = challengeConfig.processActivitiesWithQuota(monthActivities, userData.gender || 'male');
+    // Sử dụng hàm mới để xử lý với quota và validation (truyền thêm eventParticipations và disabledDefaultEvents)
+    const result = challengeConfig.processActivitiesWithQuota(monthActivities, userData.gender || 'male', eventParticipations, disabledDefaultEvents);
     
     // Cập nhật processed data để hiển thị
     setProcessedData(result);
@@ -212,7 +260,7 @@ function Dashboard({ user }) {
       swimDeficit: result.summary.finalSwimDeficit,
       penaltyDetails: result.summary
     });
-  }, [activities, userData]);
+  }, [activities, userData, eventParticipations, disabledDefaultEvents]);
 
   const formatCurrency = (amount) => challengeConfig.formatCurrency(amount);
   const formatDate = (date) => challengeConfig.formatDate(date);
@@ -322,10 +370,14 @@ function Dashboard({ user }) {
             </div>
             
             {/* User info */}
-            <div className="flex items-center bg-white/20 px-3 py-1.5 rounded-full">
-              {userData?.strava_athlete?.profile || userData?.strava_athlete?.profile_medium ? (
+            <button
+              onClick={() => setShowProfileModal(true)}
+              className="flex items-center bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-full transition cursor-pointer"
+              title="Chỉnh sửa thông tin cá nhân"
+            >
+              {userData?.avatarUrl || userData?.strava_athlete?.profile || userData?.strava_athlete?.profile_medium ? (
                 <img
-                  src={userData.strava_athlete.profile_medium || userData.strava_athlete.profile}
+                  src={userData.avatarUrl || userData.strava_athlete.profile_medium || userData.strava_athlete.profile}
                   alt="avatar"
                   className="w-7 h-7 rounded-full mr-2 border-2 border-white/50 object-cover"
                 />
@@ -333,7 +385,8 @@ function Dashboard({ user }) {
                 <User className="w-5 h-5 mr-2" />
               )}
               <span className="text-sm font-medium hidden sm:inline">{userData?.fullName || user?.email?.split('@')[0]}</span>
-            </div>
+              <Edit className="w-3.5 h-3.5 ml-1.5 opacity-70" />
+            </button>
           </div>
           
           {/* Row 2: Navigation buttons */}
@@ -379,53 +432,127 @@ function Dashboard({ user }) {
           <PushNotificationToggle userId={user?.uid} />
         </div>
 
-        {/* Strava Connection */}
-        <div className="bg-white rounded-xl shadow p-6 mb-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-bold text-gray-900 mb-1">🔗 Kết nối Strava</h3>
-              <p className="text-gray-600">
-                {stravaConnected 
-                  ? '✅ Đã kết nối với Strava' 
-                  : '❌ Chưa kết nối với Strava'}
-              </p>
-            </div>
-            <div className="space-x-3">
-              {!stravaConnected && (
+        {/* Banner ngày lễ mặc định */}
+        {(() => {
+          const todayEvents = challengeConfig.getTodayDefaultEvents(userData?.gender || 'male');
+          if (todayEvents.length > 0) {
+            return (
+              <div className="mb-6 p-4 bg-gradient-to-r from-yellow-100 to-orange-100 border border-yellow-300 rounded-xl shadow-sm">
+                <div className="flex items-start gap-3">
+                  <span className="text-3xl">🎉</span>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-orange-800 text-lg mb-1">
+                      Hôm nay là ngày lễ đặc biệt!
+                    </h3>
+                    {todayEvents.map((evt, idx) => (
+                      <div key={idx} className="mb-2 last:mb-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">{evt.icon}</span>
+                          <span className="font-semibold text-orange-700">{evt.name}</span>
+                          {evt.genderTarget === 'female' && (
+                            <span className="px-2 py-0.5 text-xs bg-pink-500 text-white rounded-full">Dành cho nữ</span>
+                          )}
+                          {evt.genderTarget === 'male' && (
+                            <span className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded-full">Dành cho nam</span>
+                          )}
+                        </div>
+                        <p className="text-sm text-orange-600 ml-7">{evt.description}</p>
+                      </div>
+                    ))}
+                    <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-sm text-green-700 font-medium">
+                        ✨ Tất cả tracklog hôm nay được tính <strong>FULL km</strong>, không giới hạn!
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
+
+        {/* Strava Connection + Báo cáo chấn thương */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          {/* Strava Connection */}
+          <div className="bg-white rounded-xl shadow p-4 md:p-6">
+            <div className="flex flex-col gap-3">
+              <div>
+                <h3 className="text-base md:text-lg font-bold text-gray-900 mb-1">🔗 Kết nối Strava</h3>
+                <p className="text-sm text-gray-600">
+                  {stravaConnected 
+                    ? '✅ Đã kết nối với Strava' 
+                    : '❌ Chưa kết nối với Strava'}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {!stravaConnected && (
+                  <button
+                    onClick={connectStrava}
+                    className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm"
+                  >
+                    Kết nối Strava
+                  </button>
+                )}
                 <button
-                  onClick={connectStrava}
-                  className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-6 py-2 rounded-lg font-medium hover:opacity-90 transition shadow"
+                  onClick={syncActivities}
+                  disabled={!stravaConnected}
+                  className={`px-4 py-2 rounded-lg font-medium transition shadow text-sm ${
+                    stravaConnected
+                      ? 'bg-blue-600 text-white hover:bg-blue-700'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
                 >
-                  Kết nối Strava
+                  <RefreshCw className="inline w-4 h-4 mr-1" />
+                  Đồng bộ
                 </button>
-              )}
+              </div>
+            </div>
+          </div>
+
+          {/* Báo cáo chấn thương / Ốm */}
+          <div className="bg-gradient-to-br from-orange-50 to-red-50 border border-orange-200 rounded-xl shadow p-4 md:p-6">
+            <div className="flex flex-col gap-3">
+              <div>
+                <h3 className="text-base md:text-lg font-bold text-orange-800 mb-1">🩹 Báo cáo chấn thương / Ốm</h3>
+                <p className="text-sm text-orange-700">
+                  Gửi yêu cầu giảm KPI nếu bạn gặp vấn đề sức khỏe
+                </p>
+              </div>
               <button
-                onClick={syncActivities}
-                disabled={!stravaConnected}
-                className={`px-6 py-2 rounded-lg font-medium transition shadow ${
-                  stravaConnected
-                    ? 'bg-blue-600 text-white hover:bg-blue-700'
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
+                onClick={() => setShowExceptionModal(true)}
+                className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm w-fit"
               >
-                <RefreshCw className="inline w-4 h-4 mr-2" />
-                Đồng bộ dữ liệu
+                <Heart className="inline w-4 h-4 mr-1" />
+                Gửi yêu cầu
               </button>
             </div>
           </div>
         </div>
 
+        {/* Sự kiện đặc biệt - Gán activity vào sự kiện từ thiện */}
+        <div className="mb-6">
+          <EventActivitySelector 
+            user={user} 
+            activities={activities}
+            onActivityLinked={() => {
+              syncActivities();
+              loadEventParticipations(); // Reload event participations để tính lại
+            }}
+          />
+        </div>
+
         {/* Stats Overview - Gộp stat + progress bar cùng loại */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6">
           {/* Card Chạy bộ */}
-          <div className="bg-gradient-to-br from-blue-500 to-cyan-500 text-white rounded-xl shadow p-6">
-            <div className="flex items-center mb-4">
-              <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4 text-2xl">
+          <div className="bg-gradient-to-br from-blue-500 to-cyan-500 text-white rounded-xl shadow p-4 md:p-6">
+            <div className="flex items-center mb-3 md:mb-4">
+              <div className="w-10 h-10 md:w-12 md:h-12 bg-white/20 rounded-lg flex items-center justify-center mr-3 md:mr-4 text-xl md:text-2xl">
                 🏃
               </div>
               <div>
-                <div className="text-2xl font-bold">{metrics.runDistance.toFixed(1)} km</div>
-                <div className="text-sm opacity-90">Chạy bộ tháng này</div>
+                <div className="text-xl md:text-2xl font-bold">{metrics.runDistance.toFixed(1)} km</div>
+                <div className="text-xs md:text-sm opacity-90">Chạy bộ tháng này</div>
               </div>
             </div>
             <div className="text-sm mb-3">
@@ -445,14 +572,14 @@ function Dashboard({ user }) {
           </div>
 
           {/* Card Bơi lội */}
-          <div className="bg-gradient-to-br from-teal-500 to-green-500 text-white rounded-xl shadow p-6">
-            <div className="flex items-center mb-4">
-              <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4 text-2xl">
+          <div className="bg-gradient-to-br from-teal-500 to-green-500 text-white rounded-xl shadow p-4 md:p-6">
+            <div className="flex items-center mb-3 md:mb-4">
+              <div className="w-10 h-10 md:w-12 md:h-12 bg-white/20 rounded-lg flex items-center justify-center mr-3 md:mr-4 text-xl md:text-2xl">
                 🏊
               </div>
               <div>
-                <div className="text-2xl font-bold">{metrics.swimDistance.toFixed(1)} km</div>
-                <div className="text-sm opacity-90">Bơi lội tháng này</div>
+                <div className="text-xl md:text-2xl font-bold">{metrics.swimDistance.toFixed(1)} km</div>
+                <div className="text-xs md:text-sm opacity-90">Bơi lội tháng này</div>
               </div>
             </div>
             <div className="text-sm mb-3">
@@ -472,14 +599,14 @@ function Dashboard({ user }) {
           </div>
 
           {/* Card Phạt */}
-          <div className="bg-gradient-to-br from-red-500 to-pink-500 text-white rounded-xl shadow p-6">
-            <div className="flex items-center mb-4">
-              <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mr-4">
-                <DollarSign className="w-6 h-6" />
+          <div className="bg-gradient-to-br from-red-500 to-pink-500 text-white rounded-xl shadow p-4 md:p-6 sm:col-span-2 lg:col-span-1">
+            <div className="flex items-center mb-3 md:mb-4">
+              <div className="w-10 h-10 md:w-12 md:h-12 bg-white/20 rounded-lg flex items-center justify-center mr-3 md:mr-4">
+                <DollarSign className="w-5 h-5 md:w-6 md:h-6" />
               </div>
               <div>
-                <div className="text-2xl font-bold">{formatCurrency(metrics.penalty)}</div>
-                <div className="text-sm opacity-90">Phạt tháng này</div>
+                <div className="text-xl md:text-2xl font-bold">{formatCurrency(metrics.penalty)}</div>
+                <div className="text-xs md:text-sm opacity-90">Phạt tháng này</div>
               </div>
             </div>
             <div className="text-sm">
@@ -491,16 +618,16 @@ function Dashboard({ user }) {
         </div>
 
         {/* Recent Activities */}
-        <div className="bg-white rounded-xl shadow p-6 mb-6">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-xl font-bold text-gray-900">📝 Hoạt động gần đây</h3>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-500">
+        <div className="bg-white rounded-xl shadow p-4 md:p-6 mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4 md:mb-6">
+            <h3 className="text-lg md:text-xl font-bold text-gray-900">📝 Hoạt động gần đây</h3>
+            <div className="flex items-center gap-3 sm:space-x-4">
+              <span className="text-xs sm:text-sm text-gray-500">
                 Cập nhật: {lastRefresh.toLocaleTimeString('vi-VN')}
               </span>
               <button
                 onClick={() => loadActivities(true)}
-                className="flex items-center text-blue-600 hover:text-blue-800"
+                className="flex items-center text-blue-600 hover:text-blue-800 text-sm"
               >
                 <RefreshCw className="w-4 h-4 mr-1" />
                 Làm mới
@@ -530,10 +657,10 @@ function Dashboard({ user }) {
                   const [year, month] = monthKey.split('-');
                   const gender = userData?.gender || 'male';
                   
-                  // Xử lý với quota và validation cho tháng này
+                  // Xử lý với quota và validation cho tháng này (truyền thêm eventParticipations)
                   let monthResult;
                   try {
-                    monthResult = challengeConfig.processActivitiesWithQuota(monthActs, gender);
+                    monthResult = challengeConfig.processActivitiesWithQuota(monthActs, gender, eventParticipations);
                   } catch (err) {
                     console.error('Error processing activities:', err);
                     monthResult = { activities: monthActs.map(a => ({...a, validation: {}})), summary: { totalRunCounted: 0, totalSwimCounted: 0, runTarget: 80, swimTarget: 16, runProgress: 0, swimProgress: 0, totalPenalty: 0, conversion: {} } };
@@ -646,6 +773,10 @@ function Dashboard({ user }) {
                             let icon, iconBg, borderColor;
                             if (!v.isValid) {
                               borderColor = 'border-red-300 bg-red-50';
+                            } else if (v.isEventActivity) {
+                              borderColor = 'border-purple-300 bg-purple-50'; // Event activity
+                            } else if (v.isDefaultEventDay) {
+                              borderColor = 'border-yellow-300 bg-yellow-50'; // Ngày lễ mặc định
                             } else if (v.quotaExceeded) {
                               borderColor = 'border-orange-300 bg-orange-50';
                             } else {
@@ -685,8 +816,13 @@ function Dashboard({ user }) {
                                   {/* Distance info */}
                                   <div className="text-right min-w-[120px]">
                                     <div className="font-bold text-lg">{distanceKm.toFixed(2)} km</div>
-                                    {v.countedDistance !== undefined && v.countedDistance !== distanceKm && (
-                                      <div className={`text-sm ${v.countedDistance < distanceKm ? 'text-orange-600' : 'text-green-600'}`}>
+                                    {v.countedDistance !== undefined && !v.notCounted && (
+                                      <div className={`text-sm ${
+                                        !v.isValid ? 'text-red-600' :
+                                        v.isEventActivity ? 'text-purple-600' :
+                                        v.isDefaultEventDay ? 'text-yellow-700' :
+                                        v.quotaExceeded ? 'text-orange-600' : 'text-green-600'
+                                      }`}>
                                         → Tính: {v.countedDistance.toFixed(2)} km
                                       </div>
                                     )}
@@ -698,8 +834,31 @@ function Dashboard({ user }) {
                                 
                                 {/* Validation & Quota details */}
                                 <div className="mt-3 pt-3 border-t border-gray-200 text-xs space-y-1">
-                                  {/* Quota info */}
-                                  {v.dailyQuota && (
+                                  {/* Event activity info - hiển thị khi là event activity */}
+                                  {v.isEventActivity && (
+                                    <div className="flex items-center bg-purple-100 text-purple-700 font-medium p-2 rounded-lg border border-purple-300">
+                                      <span className="mr-2 text-lg">🎉</span>
+                                      <span>
+                                        {v.eventInfo?.eventName 
+                                          ? `Sự kiện: ${v.eventInfo.eventName}` 
+                                          : 'Sự kiện đặc biệt'
+                                        } - <strong>Tính FULL {v.countedDistance || (v.distance/1000).toFixed(2)} km</strong> (không giới hạn quota ngày)
+                                      </span>
+                                    </div>
+                                  )}
+                                  
+                                  {/* Default event day info - ngày lễ mặc định */}
+                                  {v.isDefaultEventDay && !v.isEventActivity && (
+                                    <div className="flex items-center bg-yellow-100 text-yellow-700 font-medium p-2 rounded-lg border border-yellow-300">
+                                      <span className="mr-2 text-lg">{v.defaultEvent?.icon || '🎊'}</span>
+                                      <span>
+                                        <strong>{v.defaultEvent?.name || 'Ngày lễ'}</strong> - Tính FULL {v.countedDistance || (v.distance/1000).toFixed(2)} km (không giới hạn quota)
+                                      </span>
+                                    </div>
+                                  )}
+                                  
+                                  {/* Quota info - chỉ hiện nếu không phải event activity và không phải ngày lễ */}
+                                  {v.dailyQuota && !v.isEventActivity && !v.isDefaultEventDay && (
                                     <div className="flex items-center text-gray-600">
                                       <span className="mr-2">📊</span>
                                       <span>Quota ngày: {v.dailyQuota} km</span>
@@ -823,6 +982,35 @@ function Dashboard({ user }) {
         >
           <ArrowUp className="w-6 h-6" />
         </button>
+      )}
+
+      {/* KPI Exception Modal */}
+      {showExceptionModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="max-h-[90vh] overflow-y-auto">
+            <KPIExceptionRequest 
+              user={user} 
+              onClose={() => setShowExceptionModal(false)} 
+            />
+          </div>
+        </div>
+      )}
+
+      {/* User Profile Modal */}
+      {showProfileModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="max-h-[90vh] overflow-y-auto">
+            <UserProfile 
+              user={user}
+              userData={userData}
+              onClose={() => setShowProfileModal(false)}
+              onUpdate={(updatedData) => {
+                setUserData(prev => ({ ...prev, ...updatedData }));
+                setShowProfileModal(false);
+              }}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

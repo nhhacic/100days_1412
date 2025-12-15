@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore, doc, setDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import { getStorage } from 'firebase/storage';
 
 // Firebase Config cho Development (localhost)
 const firebaseConfig = {
@@ -18,6 +19,7 @@ const app = initializeApp(firebaseConfig);
 // Initialize services
 export const db = getFirestore(app);
 export const auth = getAuth(app);
+export const storage = getStorage(app);
 
 // Presence Service - theo dõi online/offline
 export const presenceService = {

@@ -230,8 +230,8 @@ function NotificationManager({ currentUser }) {
                     {getPriorityBadge(notification.priority)}
                     {getTypeBadge(notification.type)}
                     {!notification.isActive && (
-                      <span className="px-2 py-1 rounded-full text-xs bg-gray-200 text-gray-600">
-                        Đã xóa
+                      <span className="px-2 py-1 rounded-full text-xs bg-red-100 text-red-600 border border-red-200 line-through">
+                        Đã thu hồi
                       </span>
                     )}
                   </div>
@@ -451,8 +451,8 @@ function NotificationManager({ currentUser }) {
       {/* View Detail Modal */}
       {selectedNotification && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
-            <div className="p-6 border-b">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-hidden flex flex-col">
+            <div className="p-6 border-b flex-shrink-0">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-bold">Chi tiết thông báo</h3>
                 <button
@@ -463,15 +463,20 @@ function NotificationManager({ currentUser }) {
                 </button>
               </div>
             </div>
-            <div className="p-6">
+            <div className="p-6 overflow-y-auto flex-1">
               <div className="flex items-center gap-2 mb-3">
                 {getPriorityBadge(selectedNotification.priority)}
                 {getTypeBadge(selectedNotification.type)}
+                {!selectedNotification.isActive && (
+                  <span className="px-2 py-1 rounded-full text-xs bg-red-100 text-red-700 border border-red-200">
+                    Đã thu hồi
+                  </span>
+                )}
               </div>
               <h4 className="text-xl font-bold mb-2">{selectedNotification.title}</h4>
               <p className="text-gray-600 mb-4">{selectedNotification.message}</p>
               
-              <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
+              <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm mb-4">
                 <div className="flex justify-between">
                   <span className="text-gray-500">Thời gian:</span>
                   <span>{selectedNotification.createdAt?.toLocaleString('vi-VN')}</span>
@@ -482,7 +487,7 @@ function NotificationManager({ currentUser }) {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Số người đã đọc:</span>
-                  <span>{selectedNotification.readBy?.length || 0}</span>
+                  <span className="font-medium text-green-600">{selectedNotification.readBy?.length || 0}</span>
                 </div>
                 {selectedNotification.type !== 'all' && (
                   <div className="flex justify-between">
@@ -491,6 +496,100 @@ function NotificationManager({ currentUser }) {
                   </div>
                 )}
               </div>
+
+              {/* Danh sách người đã đọc */}
+              <div className="border rounded-lg overflow-hidden">
+                <div className="bg-gray-100 px-4 py-2 border-b">
+                  <h5 className="font-medium text-sm flex items-center">
+                    <Eye className="w-4 h-4 mr-2 text-green-600" />
+                    Danh sách đã đọc ({selectedNotification.readBy?.length || 0})
+                  </h5>
+                </div>
+                <div className="max-h-48 overflow-y-auto">
+                  {(!selectedNotification.readBy || selectedNotification.readBy.length === 0) ? (
+                    <div className="p-4 text-center text-gray-500 text-sm">
+                      Chưa có ai đọc thông báo này
+                    </div>
+                  ) : (
+                    <div className="divide-y">
+                      {selectedNotification.readBy.map((userId, index) => {
+                        const reader = users.find(u => u.id === userId);
+                        return (
+                          <div key={userId} className="px-4 py-2 flex items-center text-sm">
+                            <span className="w-6 h-6 bg-green-100 text-green-700 rounded-full flex items-center justify-center text-xs font-medium mr-3">
+                              {index + 1}
+                            </span>
+                            <div className="flex-1">
+                              <span className="font-medium">
+                                {reader?.fullName || reader?.email?.split('@')[0] || 'Unknown'}
+                              </span>
+                              {reader?.email && (
+                                <span className="text-gray-400 text-xs ml-2">
+                                  ({reader.email})
+                                </span>
+                              )}
+                            </div>
+                            <Check className="w-4 h-4 text-green-500" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Danh sách người chưa đọc (nếu gửi cá nhân/nhóm) */}
+              {selectedNotification.type !== 'all' && selectedNotification.targetUserIds?.length > 0 && (
+                <div className="border rounded-lg overflow-hidden mt-4">
+                  <div className="bg-orange-50 px-4 py-2 border-b">
+                    <h5 className="font-medium text-sm flex items-center text-orange-700">
+                      <AlertCircle className="w-4 h-4 mr-2" />
+                      Chưa đọc ({selectedNotification.targetUserIds.filter(id => !selectedNotification.readBy?.includes(id)).length})
+                    </h5>
+                  </div>
+                  <div className="max-h-32 overflow-y-auto">
+                    {selectedNotification.targetUserIds
+                      .filter(id => !selectedNotification.readBy?.includes(id))
+                      .map((userId, index) => {
+                        const user = users.find(u => u.id === userId);
+                        return (
+                          <div key={userId} className="px-4 py-2 flex items-center text-sm border-b last:border-b-0">
+                            <span className="w-6 h-6 bg-orange-100 text-orange-700 rounded-full flex items-center justify-center text-xs font-medium mr-3">
+                              {index + 1}
+                            </span>
+                            <span className="flex-1">
+                              {user?.fullName || user?.email?.split('@')[0] || userId}
+                            </span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer với nút thu hồi */}
+            <div className="p-4 border-t bg-gray-50 flex justify-between flex-shrink-0">
+              <button
+                onClick={() => setSelectedNotification(null)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg"
+              >
+                Đóng
+              </button>
+              {selectedNotification.isActive && (
+                <button
+                  onClick={() => {
+                    if (window.confirm('Bạn có chắc muốn thu hồi (xóa) thông báo này? Người dùng sẽ không còn thấy nó nữa.')) {
+                      handleDeleteNotification(selectedNotification.id);
+                      setSelectedNotification(null);
+                    }
+                  }}
+                  className="px-4 py-2 bg-red-500 text-white hover:bg-red-600 rounded-lg flex items-center"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Thu hồi thông báo
+                </button>
+              )}
             </div>
           </div>
         </div>

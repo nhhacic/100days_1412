@@ -25,6 +25,7 @@ import {
   Footprints, Bike, Bell, Edit, Trash2, Save, X
 } from 'lucide-react';
 import NotificationManager from './NotificationManager';
+import SpecialEventsManager from './SpecialEventsManager';
 
 function AdminIntegratedDashboard() {
   const navigate = useNavigate();
@@ -32,6 +33,7 @@ function AdminIntegratedDashboard() {
   const [allUsers, setAllUsers] = useState([]);
   const [filteredUsers, setFilteredUsers] = useState([]);
   const [presenceData, setPresenceData] = useState({}); // Lưu trạng thái online của users
+  const [allEventParticipations, setAllEventParticipations] = useState([]); // Tất cả event participations
   const [activeTab, setActiveTab] = useState('users'); // 'users' | 'notifications'
   const [stats, setStats] = useState({
     total: 0,
@@ -47,6 +49,12 @@ function AdminIntegratedDashboard() {
   });
   
   const [filter, setFilter] = useState('all');
+  const [advancedFilter, setAdvancedFilter] = useState('none'); // Bộ lọc nâng cao
+  const [penaltyThreshold, setPenaltyThreshold] = useState(0); // Ngưỡng tiền phạt
+  const [inactiveDays, setInactiveDays] = useState(7); // Số ngày không hoạt động
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showBulkMessageModal, setShowBulkMessageModal] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState({ title: '', content: '', priority: 'normal' });
   const [search, setSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedUser, setSelectedUser] = useState(null);
@@ -80,8 +88,14 @@ function AdminIntegratedDashboard() {
   const itemsPerPage = 12;
 
   useEffect(() => {
-    loadUsers();
-    loadPresenceData();
+    const initializeData = async () => {
+      // Load event participations TRƯỚC và lấy kết quả để truyền vào loadUsers
+      const participations = await loadAllEventParticipations();
+      loadUsers(participations);
+      loadPresenceData();
+    };
+    
+    initializeData();
     setConfig(challengeConfig.getConfig());
     
     // Refresh presence data mỗi 30 giây
@@ -94,7 +108,7 @@ function AdminIntegratedDashboard() {
 
   useEffect(() => {
     applyFilters();
-  }, [allUsers, filter, search]);
+  }, [allUsers, filter, search, advancedFilter, penaltyThreshold, inactiveDays]);
 
   // Load trạng thái presence (online/offline) của tất cả users
   const loadPresenceData = async () => {
@@ -122,8 +136,35 @@ function AdminIntegratedDashboard() {
     }
   };
 
-  const loadUsers = async () => {
+  // Load tất cả event participations
+  const loadAllEventParticipations = async () => {
+    try {
+      const participationsRef = collection(db, 'event_participations');
+      const snapshot = await getDocs(participationsRef);
+      
+      const participations = [];
+      snapshot.forEach(docSnap => {
+        participations.push({
+          id: docSnap.id,
+          ...docSnap.data()
+        });
+      });
+      
+      console.log('[Admin] Loaded all event participations:', participations.length);
+      setAllEventParticipations(participations);
+      return participations; // Trả về để sử dụng trực tiếp
+    } catch (error) {
+      console.error('Error loading event participations:', error);
+      return [];
+    }
+  };
+
+  const loadUsers = async (eventParticipationsData = null) => {
     setLoading(true);
+    
+    // Sử dụng dữ liệu truyền vào hoặc state hiện tại
+    const participationsToUse = eventParticipationsData || allEventParticipations;
+    
     try {
       const usersRef = collection(db, 'users');
       const q = query(usersRef, orderBy('createdAt', 'desc'), limit(500));
@@ -150,7 +191,7 @@ function AdminIntegratedDashboard() {
         };
 
         // Tính toán KPI và phạt (có thể tích hợp với Strava API thực tế)
-        const metrics = await calculateUserMetrics(user);
+        const metrics = await calculateUserMetrics(user, participationsToUse);
         user.metrics = metrics;
 
         userList.push(user);
@@ -162,7 +203,7 @@ function AdminIntegratedDashboard() {
         
         if (user.isActive) activeCount++;
         if (user.depositPaid) totalDeposit += 500000;
-        totalPenalty += metrics.penalty;
+        totalPenalty += metrics.allMonthsPenalty?.total || 0; // Tổng phạt tất cả tháng
         totalActivities += metrics.activityCount;
         totalDistance += metrics.totalDistance;
       }
@@ -175,7 +216,7 @@ function AdminIntegratedDashboard() {
         rejected: rejectedCount,
         active: activeCount,
         totalDeposit,
-        totalPenalty,
+        totalPenalty, // Đây giờ là tổng phạt TẤT CẢ các tháng
         totalActivities,
         totalDistance: parseFloat(totalDistance.toFixed(1))
       });
@@ -188,13 +229,19 @@ function AdminIntegratedDashboard() {
     }
   };
 
-  const calculateUserMetrics = async (user) => {
+  const calculateUserMetrics = async (user, participationsData = null) => {
     // Lấy activities THẬT từ Firestore (đã được sync từ Strava)
     const target = config.monthlyTargets[user.gender || 'male'];
     const gender = user.gender || 'male';
     
     // Lấy activities từ user document trong Firestore
     const userActivities = user.strava_activities || [];
+    
+    // Sử dụng dữ liệu participations truyền vào hoặc từ state
+    const participationsToUse = participationsData || allEventParticipations;
+    
+    // Lấy event participations của user này
+    const userEventParticipations = participationsToUse.filter(p => p.userId === user.id);
     
     // Lọc activities trong tháng hiện tại
     const now = new Date();
@@ -207,8 +254,8 @@ function AdminIntegratedDashboard() {
       return activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear;
     });
     
-    // Xử lý activities với quota và validation
-    const monthResult = challengeConfig.processActivitiesWithQuota(monthActivities, gender);
+    // Xử lý activities với quota và validation (truyền thêm eventParticipations)
+    const monthResult = challengeConfig.processActivitiesWithQuota(monthActivities, gender, userEventParticipations);
     const { summary, activities: processedActivities } = monthResult;
     
     // Lấy activities 30 ngày gần đây
@@ -237,6 +284,9 @@ function AdminIntegratedDashboard() {
     // Tính monthly stats từ activities thật
     const monthlyStats = calculateMonthlyStatsFromReal(userActivities);
     
+    // Tính tổng phạt tất cả các tháng từ đầu thử thách
+    const allMonthsPenalty = calculateAllMonthsPenalty(userActivities, gender, userEventParticipations);
+    
     return {
       runDistance: summary.totalRunCounted,
       swimDistance: summary.totalSwimCounted,
@@ -252,7 +302,58 @@ function AdminIntegratedDashboard() {
       streak,
       thirtyDayActivities,
       monthlyStats,
-      thirtyDayChart: generateThirtyDayChartFromReal(thirtyDayActivities)
+      thirtyDayChart: generateThirtyDayChartFromReal(thirtyDayActivities),
+      allMonthsPenalty // Tổng phạt tất cả tháng
+    };
+  };
+  
+  // Tính tổng phạt tất cả các tháng từ đầu thử thách
+  const calculateAllMonthsPenalty = (userActivities, gender, userEventParticipations) => {
+    const challengeStartDate = new Date('2025-11-01');
+    const now = new Date();
+    const months = [];
+    
+    // Tạo danh sách các tháng từ đầu thử thách đến hiện tại
+    let currentDate = new Date(challengeStartDate);
+    while (currentDate <= now) {
+      months.push({
+        year: currentDate.getFullYear(),
+        month: currentDate.getMonth()
+      });
+      currentDate.setMonth(currentDate.getMonth() + 1);
+    }
+    
+    let totalPenaltyAllMonths = 0;
+    const monthlyDetails = [];
+    
+    for (const { year, month } of months) {
+      // Filter activities cho tháng này
+      const monthActivities = userActivities.filter(activity => {
+        const activityDate = new Date(activity.start_date);
+        return activityDate.getMonth() === month && activityDate.getFullYear() === year;
+      });
+      
+      // Xử lý activities với quota và validation
+      const monthResult = challengeConfig.processActivitiesWithQuota(monthActivities, gender, userEventParticipations);
+      const { summary } = monthResult;
+      
+      const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+      monthlyDetails.push({
+        monthKey,
+        monthName: new Date(year, month, 1).toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' }),
+        runDistance: summary.totalRunCounted,
+        swimDistance: summary.totalSwimCounted,
+        runDeficit: summary.finalRunDeficit,
+        swimDeficit: summary.finalSwimDeficit,
+        penalty: summary.totalPenalty
+      });
+      
+      totalPenaltyAllMonths += summary.totalPenalty;
+    }
+    
+    return {
+      total: totalPenaltyAllMonths,
+      months: monthlyDetails
     };
   };
 
@@ -374,10 +475,106 @@ function AdminIntegratedDashboard() {
   const applyFilters = () => {
     let filtered = [...allUsers];
     
+    // Lọc theo trạng thái cơ bản
     if (filter !== 'all') {
       filtered = filtered.filter(user => user.status === filter);
     }
     
+    // Lọc theo bộ lọc nâng cao
+    if (advancedFilter !== 'none') {
+      const now = new Date();
+      
+      switch (advancedFilter) {
+        case 'has_penalty':
+          // Có tiền phạt tháng này
+          filtered = filtered.filter(user => (user.metrics?.penalty || 0) > 0);
+          break;
+          
+        case 'penalty_above':
+          // Tiền phạt > ngưỡng
+          filtered = filtered.filter(user => (user.metrics?.penalty || 0) >= penaltyThreshold);
+          break;
+          
+        case 'no_strava':
+          // Chưa kết nối Strava
+          filtered = filtered.filter(user => !user.stravaConnected && !user.strava_athlete_id);
+          break;
+          
+        case 'inactive':
+          // Không có hoạt động trong X ngày
+          filtered = filtered.filter(user => {
+            const activities = user.strava_activities || [];
+            if (activities.length === 0) return true;
+            
+            const lastActivity = activities.reduce((latest, act) => {
+              const actDate = new Date(act.start_date);
+              return actDate > latest ? actDate : latest;
+            }, new Date(0));
+            
+            const daysSinceLastActivity = Math.floor((now - lastActivity) / (1000 * 60 * 60 * 24));
+            return daysSinceLastActivity >= inactiveDays;
+          });
+          break;
+          
+        case 'no_deposit':
+          // Chưa nộp tiền cọc
+          filtered = filtered.filter(user => !user.depositPaid);
+          break;
+          
+        case 'low_kpi':
+          // KPI thấp (dưới 50%)
+          filtered = filtered.filter(user => {
+            const runProgress = user.metrics?.runProgress || 0;
+            const swimProgress = user.metrics?.swimProgress || 0;
+            return runProgress < 50 || swimProgress < 50;
+          });
+          break;
+          
+        case 'critical_kpi':
+          // KPI rất thấp (dưới 30%)
+          filtered = filtered.filter(user => {
+            const runProgress = user.metrics?.runProgress || 0;
+            const swimProgress = user.metrics?.swimProgress || 0;
+            return runProgress < 30 || swimProgress < 30;
+          });
+          break;
+          
+        case 'new_this_week':
+          // Mới đăng ký trong tuần này
+          const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          filtered = filtered.filter(user => user.createdAt >= weekAgo);
+          break;
+          
+        case 'new_this_month':
+          // Mới đăng ký trong tháng này
+          filtered = filtered.filter(user => {
+            return user.createdAt.getMonth() === now.getMonth() && 
+                   user.createdAt.getFullYear() === now.getFullYear();
+          });
+          break;
+          
+        case 'no_activity_this_month':
+          // Chưa có hoạt động nào trong tháng này
+          filtered = filtered.filter(user => {
+            const activities = user.strava_activities || [];
+            const monthActivities = activities.filter(act => {
+              const actDate = new Date(act.start_date);
+              return actDate.getMonth() === now.getMonth() && actDate.getFullYear() === now.getFullYear();
+            });
+            return monthActivities.length === 0;
+          });
+          break;
+          
+        case 'approved_no_strava':
+          // Đã được duyệt nhưng chưa kết nối Strava
+          filtered = filtered.filter(user => 
+            user.status === 'approved' && !user.stravaConnected && !user.strava_athlete_id
+          );
+          break;
+      }
+    }
+    
+    // Lọc theo từ khóa tìm kiếm
     if (search) {
       const searchLower = search.toLowerCase();
       filtered = filtered.filter(user => 
@@ -533,6 +730,89 @@ function AdminIntegratedDashboard() {
     setViewMode('list');
   };
 
+  // ========== BULK MESSAGE ==========
+  const handleSendBulkMessage = async () => {
+    if (!bulkMessage.title.trim() || !bulkMessage.content.trim()) {
+      alert('Vui lòng nhập tiêu đề và nội dung tin nhắn');
+      return;
+    }
+    
+    // Lấy danh sách user IDs để gửi
+    const targetUserIds = selectedUsers.length > 0 
+      ? selectedUsers 
+      : filteredUsers.map(u => u.id);
+    
+    if (targetUserIds.length === 0) {
+      alert('Không có người dùng nào để gửi tin nhắn');
+      return;
+    }
+    
+    const targetUserNames = targetUserIds.map(id => {
+      const user = allUsers.find(u => u.id === id);
+      return user?.fullName || user?.email || id;
+    });
+    
+    if (!window.confirm(
+      `Xác nhận gửi tin nhắn đến ${targetUserIds.length} người dùng?\n\n` +
+      `Tiêu đề: ${bulkMessage.title}\n` +
+      `Độ ưu tiên: ${bulkMessage.priority === 'high' ? 'Cao' : bulkMessage.priority === 'urgent' ? 'Khẩn cấp' : 'Bình thường'}`
+    )) {
+      return;
+    }
+    
+    try {
+      const { addDoc, collection, serverTimestamp } = await import('firebase/firestore');
+      
+      // Tạo notification mới
+      const notificationData = {
+        title: bulkMessage.title,
+        message: bulkMessage.content,
+        priority: bulkMessage.priority,
+        type: 'bulk_message',
+        targetUserIds: targetUserIds,
+        targetType: 'selected', // 'all' | 'selected'
+        createdAt: serverTimestamp(),
+        createdBy: auth.currentUser?.email || 'admin',
+        createdByUID: auth.currentUser?.uid,
+        isActive: true,
+        readBy: [],
+        filterCriteria: advancedFilter !== 'none' ? {
+          advancedFilter,
+          penaltyThreshold: advancedFilter === 'penalty_above' ? penaltyThreshold : null,
+          inactiveDays: advancedFilter === 'inactive' ? inactiveDays : null,
+          basicFilter: filter,
+          searchTerm: search || null
+        } : null
+      };
+      
+      await addDoc(collection(db, 'notifications'), notificationData);
+      
+      alert(`✅ Đã gửi tin nhắn đến ${targetUserIds.length} người dùng!`);
+      setShowBulkMessageModal(false);
+      setBulkMessage({ title: '', content: '', priority: 'normal' });
+    } catch (error) {
+      console.error('Error sending bulk message:', error);
+      alert('❌ Lỗi khi gửi tin nhắn: ' + error.message);
+    }
+  };
+
+  const getAdvancedFilterLabel = () => {
+    switch (advancedFilter) {
+      case 'has_penalty': return '💰 Có tiền phạt';
+      case 'penalty_above': return `💰 Phạt ≥ ${penaltyThreshold.toLocaleString()}đ`;
+      case 'no_strava': return '🔗 Chưa kết nối Strava';
+      case 'inactive': return `😴 Không HĐ ${inactiveDays} ngày`;
+      case 'no_deposit': return '💳 Chưa nộp cọc';
+      case 'low_kpi': return '📉 KPI thấp (<50%)';
+      case 'critical_kpi': return '🚨 KPI rất thấp (<30%)';
+      case 'new_this_week': return '🆕 Mới tuần này';
+      case 'new_this_month': return '🆕 Mới tháng này';
+      case 'no_activity_this_month': return '📭 Chưa HĐ tháng này';
+      case 'approved_no_strava': return '⚠️ Đã duyệt, chưa Strava';
+      default: return null;
+    }
+  };
+
   // ========== DELETE USER ==========
   const handleDeleteUser = async (userId, userName) => {
     const confirmText = prompt(
@@ -612,6 +892,9 @@ function AdminIntegratedDashboard() {
     const userActivities = user.strava_activities || [];
     const gender = user.gender || 'male';
     
+    // Lấy event participations của user này
+    const userEventParticipations = allEventParticipations.filter(p => p.userId === user.id);
+    
     // Xử lý activities với quota và validation cho tháng hiện tại
     const now = new Date();
     const currentMonth = now.getMonth();
@@ -623,8 +906,8 @@ function AdminIntegratedDashboard() {
       return activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear;
     });
     
-    // Xử lý với quota và validation
-    const monthResult = challengeConfig.processActivitiesWithQuota(monthActivities, gender);
+    // Xử lý với quota và validation (truyền thêm eventParticipations)
+    const monthResult = challengeConfig.processActivitiesWithQuota(monthActivities, gender, userEventParticipations);
     
     // Lưu processed activities để hiển thị (tất cả activities của tháng hiện tại)
     setSelectedUserActivities(monthResult.activities || []);
@@ -785,96 +1068,113 @@ function AdminIntegratedDashboard() {
     calculateActivityStats(selectedUserActivities) : null;
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4">
+    <div className="min-h-screen bg-gray-50 p-2 sm:p-4">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-2xl p-8 mb-6">
-          <div className="flex items-center justify-between">
+        <div className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl sm:rounded-2xl p-4 sm:p-6 md:p-8 mb-4 sm:mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-3xl font-bold mb-2 flex items-center">
-                <Shield className="w-8 h-8 mr-3" />
-                Bảng Điều Khiển Quản Trị Tích Hợp
+              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-1 sm:mb-2 flex items-center">
+                <Shield className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3" />
+                <span className="hidden sm:inline">Bảng Điều Khiển Quản Trị Tích Hợp</span>
+                <span className="sm:hidden">Admin Dashboard</span>
               </h1>
-              <p className="opacity-90">Quản lý người dùng, duyệt đăng ký & theo dõi tracklog</p>
+              <p className="opacity-90 text-sm sm:text-base hidden sm:block">Quản lý người dùng, duyệt đăng ký & theo dõi tracklog</p>
             </div>
-            <div className="text-right">
-              <div className="text-2xl font-bold">{stats.total}</div>
-              <div className="text-sm opacity-90">Tổng người dùng</div>
+            <div className="text-left sm:text-right">
+              <div className="text-xl sm:text-2xl font-bold">{stats.total}</div>
+              <div className="text-xs sm:text-sm opacity-90">Tổng người dùng</div>
             </div>
           </div>
           
           {/* Navigation */}
-          <div className="flex items-center justify-between mt-6">
-            <div className="flex items-center space-x-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-4 sm:mt-6">
+            <div className="flex items-center gap-2 sm:space-x-4 overflow-x-auto">
               {viewMode === 'details' ? (
                 <button
                   onClick={() => setViewMode('list')}
-                  className="flex items-center text-white hover:text-gray-200"
+                  className="flex items-center text-white hover:text-gray-200 whitespace-nowrap text-sm sm:text-base"
                 >
                   <ChevronLeft className="w-4 h-4 mr-1" />
-                  Quay lại danh sách
+                  <span className="hidden sm:inline">Quay lại danh sách</span>
+                  <span className="sm:hidden">Quay lại</span>
                 </button>
               ) : (
                 <>
                   <button
                     onClick={() => navigate('/dashboard')}
-                    className="flex items-center text-white hover:text-gray-200"
+                    className="flex items-center text-white hover:text-gray-200 whitespace-nowrap text-sm sm:text-base"
                   >
                     <ChevronLeft className="w-4 h-4 mr-1" />
-                    Dashboard cá nhân
+                    <span className="hidden sm:inline">Dashboard cá nhân</span>
+                    <span className="sm:hidden">Dashboard</span>
                   </button>
                   <button
                     onClick={() => navigate('/admin')}
-                    className="flex items-center text-white hover:text-gray-200"
+                    className="flex items-center text-white hover:text-gray-200 whitespace-nowrap text-sm sm:text-base"
                   >
                     <Settings className="w-4 h-4 mr-1" />
-                    Cấu hình hệ thống
+                    <span className="hidden sm:inline">Cấu hình hệ thống</span>
+                    <span className="sm:hidden">Cấu hình</span>
                   </button>
                 </>
               )}
             </div>
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center gap-2 sm:space-x-4">
               <button
                 onClick={loadUsers}
-                className="flex items-center bg-white/20 text-white px-4 py-2 rounded-lg hover:bg-white/30"
+                className="flex items-center bg-white/20 text-white px-3 sm:px-4 py-2 rounded-lg hover:bg-white/30 text-sm sm:text-base"
               >
-                <RefreshCw className="w-4 h-4 mr-1" />
-                Làm mới
+                <RefreshCw className="w-4 h-4 sm:mr-1" />
+                <span className="hidden sm:inline">Làm mới</span>
               </button>
               <button
                 onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
-                className="flex items-center bg-white text-purple-600 px-4 py-2 rounded-lg font-medium hover:bg-gray-100"
+                className="flex items-center bg-white text-purple-600 px-3 sm:px-4 py-2 rounded-lg font-medium hover:bg-gray-100 text-sm sm:text-base"
               >
-                <LogOut className="w-4 h-4 mr-1" />
-                Đăng xuất
+                <LogOut className="w-4 h-4 sm:mr-1" />
+                <span className="hidden sm:inline">Đăng xuất</span>
               </button>
             </div>
           </div>
         </div>
 
         {/* Tabs Navigation */}
-        <div className="flex space-x-2 mb-6">
+        <div className="flex gap-2 sm:space-x-2 mb-4 sm:mb-6 overflow-x-auto pb-2">
           <button
             onClick={() => setActiveTab('users')}
-            className={`flex items-center px-4 py-2 rounded-lg font-medium transition ${
+            className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
               activeTab === 'users'
                 ? 'bg-white text-purple-600 shadow'
                 : 'bg-white/50 text-gray-600 hover:bg-white/80'
             }`}
           >
-            <Users className="w-4 h-4 mr-2" />
-            Quản lý người dùng
+            <Users className="w-4 h-4 mr-1 sm:mr-2" />
+            <span className="hidden sm:inline">Quản lý người dùng</span>
+            <span className="sm:hidden">Người dùng</span>
           </button>
           <button
             onClick={() => setActiveTab('notifications')}
-            className={`flex items-center px-4 py-2 rounded-lg font-medium transition ${
+            className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
               activeTab === 'notifications'
                 ? 'bg-white text-purple-600 shadow'
                 : 'bg-white/50 text-gray-600 hover:bg-white/80'
             }`}
           >
-            <Bell className="w-4 h-4 mr-2" />
+            <Bell className="w-4 h-4 mr-1 sm:mr-2" />
             Thông báo
+          </button>
+          <button
+            onClick={() => setActiveTab('events')}
+            className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
+              activeTab === 'events'
+                ? 'bg-white text-purple-600 shadow'
+                : 'bg-white/50 text-gray-600 hover:bg-white/80'
+            }`}
+          >
+            <Star className="w-4 h-4 mr-1 sm:mr-2" />
+            <span className="hidden sm:inline">Sự kiện đặc biệt</span>
+            <span className="sm:hidden">Sự kiện</span>
           </button>
         </div>
 
@@ -883,85 +1183,80 @@ function AdminIntegratedDashboard() {
           <NotificationManager currentUser={auth.currentUser} />
         )}
 
+        {/* Special Events Tab */}
+        {activeTab === 'events' && (
+          <SpecialEventsManager />
+        )}
+
         {/* Main Content - List View */}
         {activeTab === 'users' && viewMode === 'list' ? (
           <>
             {/* Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-              <div className="bg-white rounded-xl p-4 shadow">
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6">
+              <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
                 <div className="flex items-center">
-                  <div className="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center mr-4">
-                    <Clock className="w-6 h-6 text-yellow-600" />
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-yellow-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
+                    <Clock className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-600" />
                   </div>
                   <div>
-                    <div className="text-2xl font-bold">{stats.pending}</div>
-                    <div className="text-gray-600 text-sm">Chờ duyệt</div>
+                    <div className="text-xl sm:text-2xl font-bold">{stats.pending}</div>
+                    <div className="text-gray-600 text-xs sm:text-sm">Chờ duyệt</div>
                   </div>
                 </div>
               </div>
               
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
                 <div className="flex items-center">
-                  <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mr-4">
-                    <CheckCircle className="w-6 h-6 text-green-600" />
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-green-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
+                    <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" />
                   </div>
                   <div>
-                    <div className="text-2xl font-bold">{stats.approved}</div>
-                    <div className="text-gray-600 text-sm">Đã duyệt</div>
+                    <div className="text-xl sm:text-2xl font-bold">{stats.approved}</div>
+                    <div className="text-gray-600 text-xs sm:text-sm">Đã duyệt</div>
                   </div>
                 </div>
               </div>
               
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
                 <div className="flex items-center">
-                  <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center mr-4">
-                    <XCircle className="w-6 h-6 text-red-600" />
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-red-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
+                    <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-600" />
                   </div>
                   <div>
-                    <div className="text-2xl font-bold">{stats.rejected}</div>
-                    <div className="text-gray-600 text-sm">Đã từ chối</div>
+                    <div className="text-xl sm:text-2xl font-bold">{stats.rejected}</div>
+                    <div className="text-gray-600 text-xs sm:text-sm">Đã từ chối</div>
                   </div>
                 </div>
               </div>
               
-              <div className="bg-white rounded-xl p-4 shadow">
+              <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
                 <div className="flex items-center">
-                  <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mr-4">
-                    <Activity className="w-6 h-6 text-blue-600" />
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
+                    <Activity className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
                   </div>
                   <div>
-                    <div className="text-2xl font-bold">{stats.totalActivities}</div>
-                    <div className="text-gray-600 text-sm">Hoạt động</div>
+                    <div className="text-xl sm:text-2xl font-bold">{stats.totalActivities}</div>
+                    <div className="text-gray-600 text-xs sm:text-sm">Hoạt động</div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Card tổng phạt tất cả tháng */}
+              <div className="bg-white rounded-xl p-3 sm:p-4 shadow col-span-2 sm:col-span-1">
+                <div className="flex items-center">
+                  <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg flex items-center justify-center mr-2 sm:mr-4 ${stats.totalPenalty > 0 ? 'bg-red-100' : 'bg-green-100'}`}>
+                    <DollarSign className={`w-5 h-5 sm:w-6 sm:h-6 ${stats.totalPenalty > 0 ? 'text-red-600' : 'text-green-600'}`} />
+                  </div>
+                  <div>
+                    <div className={`text-lg sm:text-xl font-bold ${stats.totalPenalty > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {formatCurrency(stats.totalPenalty)}
+                    </div>
+                    <div className="text-gray-600 text-xs sm:text-sm">Tổng phạt (T11+T12)</div>
                   </div>
                 </div>
               </div>
             </div>
             
-            {/* Online Stats Bar */}
-            <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-4 mb-6 shadow">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center text-white">
-                  <div className="relative mr-3">
-                    <span className="relative flex h-4 w-4">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-4 w-4 bg-white"></span>
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-2xl font-bold">{stats.online}</span>
-                    <span className="ml-2 text-white/90">người đang online</span>
-                  </div>
-                </div>
-                <button
-                  onClick={loadPresenceData}
-                  className="flex items-center bg-white/20 text-white px-3 py-1.5 rounded-lg hover:bg-white/30 text-sm"
-                >
-                  <RefreshCw className="w-4 h-4 mr-1" />
-                  Cập nhật
-                </button>
-              </div>
-            </div>
-
             {/* Bulk Actions */}
             {filteredUsers.some(u => u.status === 'pending_approval') && (
               <div className="bg-white rounded-xl shadow p-4 mb-6">
@@ -1020,8 +1315,9 @@ function AdminIntegratedDashboard() {
 
             {/* Filters and Search */}
             <div className="bg-white rounded-xl shadow p-4 mb-6">
+              {/* Row 1: Basic filters */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-4 flex-wrap gap-2">
                   <div className="flex items-center space-x-2">
                     <Filter className="w-5 h-5 text-gray-500" />
                     <select 
@@ -1037,6 +1333,19 @@ function AdminIntegratedDashboard() {
                   </div>
                   
                   <button
+                    onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                    className={`flex items-center px-3 py-2 rounded-lg border ${
+                      advancedFilter !== 'none' 
+                        ? 'bg-purple-100 border-purple-300 text-purple-700' 
+                        : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    <Layers className="w-4 h-4 mr-2" />
+                    {advancedFilter !== 'none' ? getAdvancedFilterLabel() : 'Lọc nâng cao'}
+                    {showAdvancedFilters ? <ChevronUp className="w-4 h-4 ml-1" /> : <ChevronDown className="w-4 h-4 ml-1" />}
+                  </button>
+                  
+                  <button
                     onClick={loadUsers}
                     className="flex items-center px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
                   >
@@ -1045,20 +1354,215 @@ function AdminIntegratedDashboard() {
                   </button>
                 </div>
                 
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Tìm theo email, tên hoặc ID..."
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="pl-10 pr-4 py-2 border rounded-lg w-full md:w-64"
-                  />
+                <div className="flex items-center space-x-2">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Tìm theo email, tên hoặc ID..."
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      className="pl-10 pr-4 py-2 border rounded-lg w-full md:w-64"
+                    />
+                  </div>
                 </div>
               </div>
+              
+              {/* Advanced Filters Panel */}
+              {showAdvancedFilters && (
+                <div className="mt-4 pt-4 border-t border-gray-200">
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'has_penalty' ? 'none' : 'has_penalty')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'has_penalty' 
+                          ? 'bg-red-100 text-red-700 border-2 border-red-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      💰 Có tiền phạt
+                    </button>
+                    
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'no_strava' ? 'none' : 'no_strava')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'no_strava' 
+                          ? 'bg-orange-100 text-orange-700 border-2 border-orange-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      🔗 Chưa Strava
+                    </button>
+                    
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'approved_no_strava' ? 'none' : 'approved_no_strava')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'approved_no_strava' 
+                          ? 'bg-yellow-100 text-yellow-700 border-2 border-yellow-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      ⚠️ Duyệt, chưa Strava
+                    </button>
+                    
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'no_deposit' ? 'none' : 'no_deposit')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'no_deposit' 
+                          ? 'bg-pink-100 text-pink-700 border-2 border-pink-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      💳 Chưa nộp cọc
+                    </button>
+                    
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'low_kpi' ? 'none' : 'low_kpi')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'low_kpi' 
+                          ? 'bg-amber-100 text-amber-700 border-2 border-amber-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      📉 KPI &lt;50%
+                    </button>
+                    
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'critical_kpi' ? 'none' : 'critical_kpi')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'critical_kpi' 
+                          ? 'bg-red-100 text-red-700 border-2 border-red-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      🚨 KPI &lt;30%
+                    </button>
+                    
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'no_activity_this_month' ? 'none' : 'no_activity_this_month')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'no_activity_this_month' 
+                          ? 'bg-gray-200 text-gray-800 border-2 border-gray-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      📭 Chưa HĐ tháng này
+                    </button>
+                    
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'new_this_week' ? 'none' : 'new_this_week')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'new_this_week' 
+                          ? 'bg-green-100 text-green-700 border-2 border-green-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      🆕 Mới tuần này
+                    </button>
+                    
+                    <button
+                      onClick={() => setAdvancedFilter(advancedFilter === 'new_this_month' ? 'none' : 'new_this_month')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
+                        advancedFilter === 'new_this_month' 
+                          ? 'bg-blue-100 text-blue-700 border-2 border-blue-400' 
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      🆕 Mới tháng này
+                    </button>
+                  </div>
+                  
+                  {/* Custom thresholds */}
+                  <div className="mt-4 flex flex-wrap gap-4">
+                    <div className="flex items-center space-x-2">
+                      <label className="text-sm text-gray-600">Phạt ≥</label>
+                      <input
+                        type="number"
+                        value={penaltyThreshold}
+                        onChange={(e) => setPenaltyThreshold(parseInt(e.target.value) || 0)}
+                        className="w-32 border rounded-lg px-3 py-1 text-sm"
+                        placeholder="Số tiền"
+                      />
+                      <span className="text-sm text-gray-500">đ</span>
+                      <button
+                        onClick={() => setAdvancedFilter(advancedFilter === 'penalty_above' ? 'none' : 'penalty_above')}
+                        className={`px-3 py-1 rounded text-sm ${
+                          advancedFilter === 'penalty_above' 
+                            ? 'bg-red-600 text-white' 
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        Lọc
+                      </button>
+                    </div>
+                    
+                    <div className="flex items-center space-x-2">
+                      <label className="text-sm text-gray-600">Không HĐ</label>
+                      <input
+                        type="number"
+                        value={inactiveDays}
+                        onChange={(e) => setInactiveDays(parseInt(e.target.value) || 7)}
+                        className="w-20 border rounded-lg px-3 py-1 text-sm"
+                        min="1"
+                      />
+                      <span className="text-sm text-gray-500">ngày</span>
+                      <button
+                        onClick={() => setAdvancedFilter(advancedFilter === 'inactive' ? 'none' : 'inactive')}
+                        className={`px-3 py-1 rounded text-sm ${
+                          advancedFilter === 'inactive' 
+                            ? 'bg-orange-600 text-white' 
+                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        Lọc
+                      </button>
+                    </div>
+                    
+                    {advancedFilter !== 'none' && (
+                      <button
+                        onClick={() => setAdvancedFilter('none')}
+                        className="px-4 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600"
+                      >
+                        ✕ Xóa bộ lọc nâng cao
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* Filter Result & Bulk Message */}
+              {(filteredUsers.length > 0 && filteredUsers.length < allUsers.length) && (
+                <div className="mt-4 pt-4 border-t border-gray-200 flex items-center justify-between">
+                  <div className="flex items-center text-sm">
+                    <span className="text-gray-600">
+                      Đang hiển thị <strong className="text-purple-600">{filteredUsers.length}</strong> / {allUsers.length} người dùng
+                    </span>
+                    {advancedFilter !== 'none' && (
+                      <span className="ml-2 px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">
+                        {getAdvancedFilterLabel()}
+                      </span>
+                    )}
+                  </div>
+                  
+                  <button
+                    onClick={() => {
+                      setBulkMessage({ 
+                        title: '', 
+                        content: '', 
+                        priority: 'normal' 
+                      });
+                      setShowBulkMessageModal(true);
+                    }}
+                    className="flex items-center px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition shadow"
+                  >
+                    <Mail className="w-4 h-4 mr-2" />
+                    Gửi tin nhắn ({selectedUsers.length > 0 ? selectedUsers.length : filteredUsers.length} người)
+                  </button>
+                </div>
+              )}
             </div>
 
-            {/* Users Table */}
+            {/* Users List - Mobile Friendly */}
             <div className="bg-white rounded-xl shadow overflow-hidden">
               {loading ? (
                 <div className="p-8 text-center">
@@ -1072,217 +1576,199 @@ function AdminIntegratedDashboard() {
                 </div>
               ) : (
                 <>
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">
-                            <input
-                              type="checkbox"
-                              checked={selectedUsers.length === currentUsers.length && currentUsers.length > 0}
-                              onChange={toggleSelectAll}
-                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            />
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Người dùng
-                          </th>
-                          <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Online
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Phân quyền
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Trạng thái
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Kết quả
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Phạt
-                          </th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Thao tác
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {currentUsers.map((user) => (
-                          <tr key={user.id} className="hover:bg-gray-50">
-                            <td className="px-6 py-4">
-                              <input
-                                type="checkbox"
-                                checked={selectedUsers.includes(user.id)}
-                                onChange={() => toggleSelectUser(user.id)}
-                                disabled={user.status !== 'pending_approval'}
-                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                  {/* Mobile Card View */}
+                  <div className="divide-y divide-gray-200">
+                    {currentUsers.map((user) => (
+                      <div key={user.id} className="p-4 hover:bg-gray-50">
+                        {/* Header: Avatar + Name + Checkbox */}
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedUsers.includes(user.id)}
+                            onChange={() => toggleSelectUser(user.id)}
+                            disabled={user.status !== 'pending_approval'}
+                            className="mt-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                          />
+                          
+                          {/* Avatar */}
+                          <div className="flex-shrink-0">
+                            {user.strava_athlete?.profile || user.strava_athlete?.profile_medium ? (
+                              <img
+                                src={user.strava_athlete.profile_medium || user.strava_athlete.profile}
+                                alt={user.fullName || 'Avatar'}
+                                className="w-12 h-12 rounded-full object-cover border-2 border-gray-200"
+                                onError={(e) => {
+                                  e.target.onerror = null;
+                                  e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user.fullName || user.email || 'U')}&background=random&size=48`;
+                                }}
                               />
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="flex items-center">
-                                {/* Avatar */}
-                                <div className="flex-shrink-0 mr-3">
-                                  {user.strava_athlete?.profile || user.strava_athlete?.profile_medium ? (
-                                    <img
-                                      src={user.strava_athlete.profile_medium || user.strava_athlete.profile}
-                                      alt={user.fullName || 'Avatar'}
-                                      className="w-10 h-10 rounded-full object-cover border-2 border-gray-200"
-                                      onError={(e) => {
-                                        e.target.onerror = null;
-                                        e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user.fullName || user.email || 'U')}&background=random&size=40`;
-                                      }}
-                                    />
-                                  ) : (
-                                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-bold text-sm">
-                                      {(user.fullName || user.email || 'U').charAt(0).toUpperCase()}
-                                    </div>
-                                  )}
-                                </div>
-                                <div>
-                                  <div className="font-medium text-gray-900">{user.fullName || 'Chưa có tên'}</div>
-                                  <div className="text-sm text-gray-500">{user.email}</div>
-                                  <div className="text-xs text-gray-400 mt-1">
-                                    <span className="inline-flex items-center">
-                                      <User className="w-3 h-3 mr-1" />
-                                      {user.gender === 'male' ? 'Nam' : 'Nữ'} • {user.birthYear || 'N/A'}
-                                    </span>
-                                  </div>
-                                </div>
+                            ) : (
+                              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-bold">
+                                {(user.fullName || user.email || 'U').charAt(0).toUpperCase()}
                               </div>
-                            </td>
-                            <td className="px-3 py-4 text-center">
-                              {presenceService.isOnline(presenceData[user.id]) ? (
-                                <div className="flex flex-col items-center">
-                                  <span className="relative flex h-3 w-3">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                                  </span>
-                                  <span className="text-xs text-green-600 mt-1">Online</span>
-                                </div>
-                              ) : (
-                                <div className="flex flex-col items-center">
-                                  <span className="inline-flex rounded-full h-3 w-3 bg-gray-300"></span>
-                                  <span className="text-xs text-gray-400 mt-1" title={presenceService.formatLastSeen(presenceData[user.id])}>
-                                    {presenceData[user.id] ? presenceService.formatLastSeen(presenceData[user.id]) : 'Offline'}
-                                  </span>
-                                </div>
-                              )}
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={RoleManager.getRoleBadge(user.role || 'user').className}>
+                            )}
+                          </div>
+                          
+                          {/* User Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <h3 className="font-semibold text-gray-900 truncate">{user.fullName || 'Chưa có tên'}</h3>
+                              <span className={RoleManager.getRoleBadge(user.role || 'user').className + ' text-xs flex-shrink-0'}>
                                 {RoleManager.getRoleBadge(user.role || 'user').text}
                               </span>
-                            </td>
-                            <td className="px-6 py-4">
+                            </div>
+                            <p className="text-sm text-gray-500 truncate">{user.email}</p>
+                            <div className="flex flex-wrap items-center gap-2 mt-1">
+                              <span className="text-xs text-gray-400">
+                                {user.gender === 'male' ? '👨 Nam' : '👩 Nữ'} • {user.birthYear || 'N/A'}
+                              </span>
                               {getStatusBadge(user.status)}
-                              <div className="mt-2">
-                                {getDepositBadge(user)}
+                              {getDepositBadge(user)}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* KPI Progress */}
+                        <div className="mt-3 grid grid-cols-2 gap-3">
+                          <div className="bg-blue-50 rounded-lg p-2">
+                            <div className="flex items-center justify-between text-sm">
+                              <span>🏃 Chạy</span>
+                              <span className="font-medium">{user.metrics.runDistance}km</span>
+                            </div>
+                            <div className="mt-1 h-1.5 bg-blue-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-blue-500 transition-all" 
+                                style={{ width: `${Math.min(100, user.metrics.runProgress)}%` }}
+                              ></div>
+                            </div>
+                            <div className="text-xs text-blue-600 mt-0.5">{user.metrics.runProgress}%</div>
+                          </div>
+                          
+                          <div className="bg-teal-50 rounded-lg p-2">
+                            <div className="flex items-center justify-between text-sm">
+                              <span>🏊 Bơi</span>
+                              <span className="font-medium">{user.metrics.swimDistance}km</span>
+                            </div>
+                            <div className="mt-1 h-1.5 bg-teal-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-teal-500 transition-all" 
+                                style={{ width: `${Math.min(100, user.metrics.swimProgress)}%` }}
+                              ></div>
+                            </div>
+                            <div className="text-xs text-teal-600 mt-0.5">{user.metrics.swimProgress}%</div>
+                          </div>
+                        </div>
+                        
+                        {/* Penalty & Activity Count */}
+                        <div className="mt-2 space-y-1">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-gray-500">{user.metrics.activityCount} hoạt động tháng này</span>
+                          </div>
+                          
+                          {/* Tổng phạt tất cả các tháng */}
+                          {user.metrics.allMonthsPenalty && (
+                            <div className={`p-2 rounded-lg ${user.metrics.allMonthsPenalty.total > 0 ? 'bg-red-50 border border-red-200' : 'bg-green-50 border border-green-200'}`}>
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-gray-600">Tổng phạt ({user.metrics.allMonthsPenalty.months?.length || 0} tháng):</span>
+                                <span className={`font-bold ${user.metrics.allMonthsPenalty.total > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                  {user.metrics.allMonthsPenalty.total > 0 ? formatCurrency(user.metrics.allMonthsPenalty.total) : '✓ 0đ'}
+                                </span>
                               </div>
-                              {user.depositProof && user.depositProof !== 'previous_season' && (
-                                <button
-                                  onClick={() => toggleDepositImage(user.id)}
-                                  className="mt-1 text-xs text-blue-600 hover:text-blue-800 flex items-center"
-                                >
-                                  <ImageIcon className="w-3 h-3 mr-1" />
-                                  {showDepositImages[user.id] ? 'Ẩn ảnh' : 'Xem ảnh'}
-                                </button>
+                              
+                              {/* Chi tiết từng tháng */}
+                              {user.metrics.allMonthsPenalty.months && user.metrics.allMonthsPenalty.months.length > 0 && (
+                                <div className="mt-1 text-xs text-gray-500 space-y-0.5">
+                                  {user.metrics.allMonthsPenalty.months.map((m, idx) => (
+                                    <div key={idx} className="flex justify-between">
+                                      <span>{m.monthKey}:</span>
+                                      <span className={m.penalty > 0 ? 'text-red-500' : 'text-green-500'}>
+                                        {m.penalty > 0 ? formatCurrency(m.penalty) : '✓'}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
                               )}
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="space-y-1">
-                                <div className="flex items-center">
-                                  <span className="mr-1">🏃</span>
-                                  <span className="text-xs">{user.metrics.runDistance}km</span>
-                                  <div className="ml-2 w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
-                                    <div 
-                                      className="h-full bg-blue-500" 
-                                      style={{ width: `${user.metrics.runProgress}%` }}
-                                    ></div>
-                                  </div>
-                                </div>
-                                <div className="flex items-center">
-                                  <span className="mr-1">🏊</span>
-                                  <span className="text-xs">{user.metrics.swimDistance}km</span>
-                                  <div className="ml-2 w-16 h-1 bg-gray-200 rounded-full overflow-hidden">
-                                    <div 
-                                      className="h-full bg-teal-500" 
-                                      style={{ width: `${user.metrics.swimProgress}%` }}
-                                    ></div>
-                                  </div>
-                                </div>
-                                <div className="text-xs text-gray-500">
-                                  {user.metrics.activityCount} hoạt động
-                                </div>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="space-y-1">
-                                <div className={`font-medium ${user.metrics.penalty > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                  {formatCurrency(user.metrics.penalty)}
-                                </div>
-                                {user.metrics.runDeficit > 0 && (
-                                  <div className="text-xs text-gray-600">
-                                    Thiếu chạy: {user.metrics.runDeficit}km
-                                  </div>
-                                )}
-                                {user.metrics.swimDeficit > 0 && (
-                                  <div className="text-xs text-gray-600">
-                                    Thiếu bơi: {user.metrics.swimDeficit}km
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-6 py-4">
-                              <div className="flex flex-wrap gap-2">
-                                <button
-                                  onClick={() => viewUserDetails(user)}
-                                  className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm hover:bg-blue-200 flex items-center"
-                                >
-                                  <Eye className="w-3 h-3 mr-1" />
-                                  Chi tiết
-                                </button>
-                                
-                                <button
-                                  onClick={() => handleEditUser(user)}
-                                  className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-lg text-sm hover:bg-yellow-200 flex items-center"
-                                >
-                                  <Edit className="w-3 h-3 mr-1" />
-                                  Sửa
-                                </button>
-                                
-                                {user.status === 'pending_approval' && (
-                                  <>
-                                    <button
-                                      onClick={() => handleApprove(user.id)}
-                                      className="px-3 py-1 bg-green-100 text-green-700 rounded-lg text-sm hover:bg-green-200 flex items-center"
-                                    >
-                                      <CheckCircle className="w-3 h-3 mr-1" />
-                                      Duyệt
-                                    </button>
-                                    <button
-                                      onClick={() => handleReject(user.id)}
-                                      className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-sm hover:bg-red-200 flex items-center"
-                                    >
-                                      <XCircle className="w-3 h-3 mr-1" />
-                                      Từ chối
-                                    </button>
-                                  </>
-                                )}
-                                
-                                <button
-                                  onClick={() => handleDeleteUser(user.id, user.fullName || user.email)}
-                                  className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-sm hover:bg-red-200 flex items-center"
-                                >
-                                  <Trash2 className="w-3 h-3 mr-1" />
-                                  Xóa
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Deficit info - Số km thiếu SAU quy đổi tháng hiện tại */}
+                        {(user.metrics.runDeficit > 0 || user.metrics.swimDeficit > 0) && (
+                          <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded-lg">
+                            <div className="text-xs font-medium text-orange-700 mb-1">⚠️ Thiếu KPI tháng này (sau quy đổi):</div>
+                            <div className="flex flex-wrap gap-2 text-xs">
+                              {user.metrics.runDeficit > 0 && (
+                                <span className="px-2 py-0.5 bg-orange-100 text-orange-700 rounded">
+                                  🏃 Thiếu chạy: <strong>{user.metrics.runDeficit}km</strong>
+                                </span>
+                              )}
+                              {user.metrics.swimDeficit > 0 && (
+                                <span className="px-2 py-0.5 bg-orange-100 text-orange-700 rounded">
+                                  🏊 Thiếu bơi: <strong>{user.metrics.swimDeficit}km</strong>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Deposit proof */}
+                        {user.depositProof && user.depositProof !== 'previous_season' && (
+                          <button
+                            onClick={() => toggleDepositImage(user.id)}
+                            className="mt-2 text-xs text-blue-600 hover:text-blue-800 flex items-center"
+                          >
+                            <ImageIcon className="w-3 h-3 mr-1" />
+                            {showDepositImages[user.id] ? 'Ẩn ảnh cọc' : 'Xem ảnh cọc'}
+                          </button>
+                        )}
+                        
+                        {/* Action Buttons */}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => viewUserDetails(user)}
+                            className="flex-1 sm:flex-none px-3 py-2 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium hover:bg-blue-200 flex items-center justify-center"
+                          >
+                            <Eye className="w-4 h-4 mr-1" />
+                            Chi tiết
+                          </button>
+                          
+                          <button
+                            onClick={() => handleEditUser(user)}
+                            className="px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg text-sm font-medium hover:bg-yellow-200 flex items-center justify-center"
+                          >
+                            <Edit className="w-4 h-4 mr-1" />
+                            Sửa
+                          </button>
+                          
+                          {user.status === 'pending_approval' && (
+                            <>
+                              <button
+                                onClick={() => handleApprove(user.id)}
+                                className="px-3 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium hover:bg-green-200 flex items-center justify-center"
+                              >
+                                <CheckCircle className="w-4 h-4 mr-1" />
+                                Duyệt
+                              </button>
+                              <button
+                                onClick={() => handleReject(user.id)}
+                                className="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200 flex items-center justify-center"
+                              >
+                                <XCircle className="w-4 h-4 mr-1" />
+                                Từ chối
+                              </button>
+                            </>
+                          )}
+                          
+                          <button
+                            onClick={() => handleDeleteUser(user.id, user.fullName || user.email)}
+                            className="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200 flex items-center justify-center"
+                          >
+                            <Trash2 className="w-4 h-4 mr-1" />
+                            Xóa
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
 
                   {/* Pagination */}
@@ -1709,8 +2195,21 @@ function AdminIntegratedDashboard() {
                             
                             {/* Validation & Quota details */}
                             <div className="mt-3 pt-3 border-t border-gray-200 text-xs space-y-1">
-                              {/* Quota info */}
-                              {v.dailyQuota && (
+                              {/* Event activity info - hiển thị khi là event activity */}
+                              {activity.isEventActivity && (
+                                <div className="flex items-center bg-purple-100 text-purple-700 font-medium p-2 rounded-lg border border-purple-300">
+                                  <span className="mr-2 text-lg">🎉</span>
+                                  <span>
+                                    {activity.eventInfo?.eventName 
+                                      ? `Sự kiện: ${activity.eventInfo.eventName}` 
+                                      : 'Sự kiện đặc biệt'
+                                    } - <strong>Tính FULL {v.countedDistance?.toFixed(2) || distanceKm.toFixed(2)} km</strong> (không giới hạn quota ngày)
+                                  </span>
+                                </div>
+                              )}
+                              
+                              {/* Quota info - chỉ hiện nếu không phải event activity */}
+                              {v.dailyQuota && !activity.isEventActivity && (
                                 <div className="flex items-center text-gray-600">
                                   <span className="mr-2">📊</span>
                                   <span>Quota ngày: {v.dailyQuota} km</span>
@@ -1947,6 +2446,159 @@ function AdminIntegratedDashboard() {
           </div>
         ) : null}
       </div>
+      
+      {/* Modal gửi tin nhắn đồng loạt */}
+      {showBulkMessageModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-200 bg-gradient-to-r from-blue-600 to-purple-600 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center text-white">
+                  <Mail className="w-6 h-6 mr-3" />
+                  <div>
+                    <h3 className="text-xl font-bold">Gửi tin nhắn đồng loạt</h3>
+                    <p className="text-white/80 text-sm">
+                      Đến {selectedUsers.length > 0 ? selectedUsers.length : filteredUsers.length} người dùng
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowBulkMessageModal(false)}
+                  className="text-white/80 hover:text-white"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              {/* Filter info */}
+              {advancedFilter !== 'none' && (
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-sm">
+                  <div className="flex items-center text-purple-700">
+                    <Layers className="w-4 h-4 mr-2" />
+                    <span>Đang lọc theo: <strong>{getAdvancedFilterLabel()}</strong></span>
+                  </div>
+                </div>
+              )}
+              
+              {/* Title */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Tiêu đề tin nhắn *
+                </label>
+                <input
+                  type="text"
+                  value={bulkMessage.title}
+                  onChange={(e) => setBulkMessage({ ...bulkMessage, title: e.target.value })}
+                  placeholder="VD: Nhắc nhở hoàn thành KPI tháng 12"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+              
+              {/* Content */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nội dung tin nhắn *
+                </label>
+                <textarea
+                  value={bulkMessage.content}
+                  onChange={(e) => setBulkMessage({ ...bulkMessage, content: e.target.value })}
+                  placeholder="Nhập nội dung tin nhắn..."
+                  rows={5}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                />
+              </div>
+              
+              {/* Priority */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Mức độ ưu tiên
+                </label>
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setBulkMessage({ ...bulkMessage, priority: 'normal' })}
+                    className={`flex-1 px-4 py-2 rounded-lg border-2 transition ${
+                      bulkMessage.priority === 'normal'
+                        ? 'border-blue-500 bg-blue-50 text-blue-700'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    📝 Bình thường
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBulkMessage({ ...bulkMessage, priority: 'high' })}
+                    className={`flex-1 px-4 py-2 rounded-lg border-2 transition ${
+                      bulkMessage.priority === 'high'
+                        ? 'border-orange-500 bg-orange-50 text-orange-700'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    ⚡ Cao
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBulkMessage({ ...bulkMessage, priority: 'urgent' })}
+                    className={`flex-1 px-4 py-2 rounded-lg border-2 transition ${
+                      bulkMessage.priority === 'urgent'
+                        ? 'border-red-500 bg-red-50 text-red-700'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    🚨 Khẩn cấp
+                  </button>
+                </div>
+              </div>
+              
+              {/* Recipients preview */}
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-sm text-gray-600 mb-2">
+                  <strong>Người nhận:</strong> {selectedUsers.length > 0 ? selectedUsers.length : filteredUsers.length} người
+                </div>
+                <div className="max-h-24 overflow-y-auto text-xs text-gray-500">
+                  {(selectedUsers.length > 0 
+                    ? allUsers.filter(u => selectedUsers.includes(u.id))
+                    : filteredUsers
+                  ).slice(0, 10).map(u => (
+                    <span key={u.id} className="inline-block bg-white border rounded px-2 py-0.5 mr-1 mb-1">
+                      {u.fullName || u.email}
+                    </span>
+                  ))}
+                  {(selectedUsers.length > 0 ? selectedUsers.length : filteredUsers.length) > 10 && (
+                    <span className="text-gray-400">
+                      ... và {(selectedUsers.length > 0 ? selectedUsers.length : filteredUsers.length) - 10} người khác
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+            
+            {/* Footer */}
+            <div className="p-6 border-t border-gray-200 flex justify-end space-x-3">
+              <button
+                onClick={() => setShowBulkMessageModal(false)}
+                className="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={handleSendBulkMessage}
+                disabled={!bulkMessage.title.trim() || !bulkMessage.content.trim()}
+                className={`px-6 py-2 rounded-lg font-medium flex items-center ${
+                  bulkMessage.title.trim() && bulkMessage.content.trim()
+                    ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700'
+                    : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                }`}
+              >
+                <Mail className="w-4 h-4 mr-2" />
+                Gửi tin nhắn
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

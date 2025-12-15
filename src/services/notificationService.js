@@ -240,6 +240,44 @@ class NotificationService {
       default: return '📢';
     }
   }
+
+  // Gửi thông báo cho tất cả admin khi có user mới đăng ký
+  async notifyAdminsNewRegistration({ userName, userEmail }) {
+    try {
+      // Lấy danh sách admin (role = admin hoặc super_admin)
+      const usersRef = collection(db, 'users');
+      const snapshot = await getDocs(usersRef);
+      
+      const adminIds = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        if (data.role === 'admin' || data.role === 'super_admin' || data.isAdmin === true) {
+          adminIds.push(docSnap.id);
+        }
+      });
+
+      if (adminIds.length === 0) {
+        console.log('No admins found to notify');
+        return { success: true, message: 'No admins to notify' };
+      }
+
+      // Tạo thông báo cho các admin
+      const result = await this.createNotification({
+        title: '👤 Đăng ký mới cần phê duyệt',
+        message: `${userName} (${userEmail}) vừa đăng ký tài khoản và đang chờ phê duyệt.`,
+        type: 'group',
+        targetUserIds: adminIds,
+        priority: 'high',
+        createdBy: 'system'
+      });
+
+      console.log(`Notified ${adminIds.length} admins about new registration`);
+      return result;
+    } catch (error) {
+      console.error('Error notifying admins:', error);
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 export default new NotificationService();

@@ -1,3 +1,28 @@
+// Sự kiện đặc biệt mặc định hằng năm
+const DEFAULT_ANNUAL_EVENTS = [
+  { name: '🎊 Tết Dương lịch', monthDay: '01-01', genderTarget: 'all' },
+  { name: '🧧 Tết Nguyên đán (Mùng 1)', lunarDate: '01-01', genderTarget: 'all' },
+  { name: '🧧 Tết Nguyên đán (Mùng 2)', lunarDate: '01-02', genderTarget: 'all' },
+  { name: '🧧 Tết Nguyên đán (Mùng 3)', lunarDate: '01-03', genderTarget: 'all' },
+  { name: '🌸 Ngày Quốc tế Phụ nữ', monthDay: '03-08', genderTarget: 'female' },
+  { name: '🏛️ Giỗ Tổ Hùng Vương', lunarDate: '03-10', genderTarget: 'all' },
+  { name: '🎗️ Ngày Giải phóng miền Nam', monthDay: '04-30', genderTarget: 'all' },
+  { name: '👷 Ngày Quốc tế Lao động', monthDay: '05-01', genderTarget: 'all' },
+  { name: '🇻🇳 Ngày Quốc khánh', monthDay: '09-02', genderTarget: 'all' },
+  { name: '💐 Ngày Phụ nữ Việt Nam', monthDay: '10-20', genderTarget: 'female' },
+  { name: '🎩 Ngày Quốc tế Nam giới', monthDay: '11-19', genderTarget: 'male' }
+];
+
+// Ánh xạ ngày Âm lịch sang Dương lịch 2025-2026
+const LUNAR_TO_SOLAR = {
+  '2025': {
+    '01-01': '2025-01-29', '01-02': '2025-01-30', '01-03': '2025-01-31', '03-10': '2025-04-06'
+  },
+  '2026': {
+    '01-01': '2026-02-17', '01-02': '2026-02-18', '01-03': '2026-02-19', '03-10': '2026-04-25'
+  }
+};
+
 // Default config - có thể override bởi admin
 const DEFAULT_CONFIG = {
   // Thông tin chung
@@ -155,6 +180,73 @@ class ChallengeConfig {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric'
+    });
+  }
+  
+  /**
+   * Kiểm tra xem ngày có phải là ngày lễ mặc định không
+   * @param {Date|string} date - Ngày cần kiểm tra
+   * @param {string} gender - Giới tính người dùng ('male'/'female')
+   * @param {Object} disabledEvents - Object chứa các event bị tắt { eventKey: false }
+   * @returns {{ isSpecial: boolean, event: object|null }}
+   */
+  isDefaultSpecialEvent(date, gender, disabledEvents = {}) {
+    const d = new Date(date);
+    const year = d.getFullYear().toString();
+    const monthDay = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const dateStr = d.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    for (const evt of DEFAULT_ANNUAL_EVENTS) {
+      // Kiểm tra giới tính - 'all' áp dụng cho tất cả
+      if (evt.genderTarget !== 'all' && evt.genderTarget !== gender) continue;
+      
+      // Lấy event key
+      const eventKey = evt.monthDay || evt.lunarDate;
+      
+      // Kiểm tra xem event có bị tắt không
+      if (disabledEvents[eventKey] === false) continue;
+      
+      // Kiểm tra ngày dương lịch (monthDay format: MM-DD)
+      if (evt.monthDay === monthDay) {
+        return { isSpecial: true, event: evt };
+      }
+      
+      // Kiểm tra ngày âm lịch (cần convert sang dương)
+      if (evt.lunarDate && LUNAR_TO_SOLAR[year]?.[evt.lunarDate] === dateStr) {
+        return { isSpecial: true, event: evt };
+      }
+    }
+    
+    return { isSpecial: false, event: null };
+  }
+  
+  /**
+   * Lấy danh sách sự kiện mặc định cho ngày hôm nay
+   * @param {string} gender - Giới tính người dùng
+   * @param {Object} disabledEvents - Object chứa các event bị tắt
+   * @returns {Array} Danh sách sự kiện
+   */
+  getTodayDefaultEvents(gender, disabledEvents = {}) {
+    const today = new Date();
+    const year = today.getFullYear().toString();
+    const monthDay = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const dateStr = today.toISOString().split('T')[0];
+    
+    return DEFAULT_ANNUAL_EVENTS.filter(evt => {
+      // Kiểm tra xem event có bị tắt không
+      const eventKey = evt.monthDay || evt.lunarDate;
+      if (disabledEvents[eventKey] === false) return false;
+      
+      // Kiểm tra giới tính
+      if (evt.genderTarget !== 'all' && evt.genderTarget !== gender) return false;
+      
+      // Kiểm tra ngày dương
+      if (evt.monthDay === monthDay) return true;
+      
+      // Kiểm tra ngày âm
+      if (evt.lunarDate && LUNAR_TO_SOLAR[year]?.[evt.lunarDate] === dateStr) return true;
+      
+      return false;
     });
   }
   
@@ -375,9 +467,30 @@ class ChallengeConfig {
   /**
    * Xử lý tất cả activities với daily quota
    * Group theo ngày, áp dụng quota, đánh dấu excess
+   * @param activities - Danh sách activities
+   * @param gender - Giới tính user
+   * @param eventParticipations - Danh sách event participations của user (optional)
+   * @param disabledDefaultEvents - Object chứa các event mặc định bị tắt (optional)
    */
-  processActivitiesWithQuota(activities, gender) {
+  processActivitiesWithQuota(activities, gender, eventParticipations = [], disabledDefaultEvents = {}) {
     const target = this.config.monthlyTargets[gender] || this.config.monthlyTargets.male;
+    
+    // Tạo Set các activityId đã gán vào event đặc biệt (để lookup nhanh)
+    // Lưu cả dạng string để đảm bảo match
+    const eventActivityIds = new Set();
+    const eventActivityMap = new Map();
+    
+    eventParticipations.forEach(p => {
+      if (p.activityId) {
+        // Lưu cả dạng string và number để đảm bảo match
+        const idStr = String(p.activityId);
+        eventActivityIds.add(idStr);
+        eventActivityMap.set(idStr, p);
+      }
+    });
+    
+    console.log('[Event Debug] Event participations count:', eventParticipations.length);
+    console.log('[Event Debug] Event activity IDs:', [...eventActivityIds]);
     
     // Nếu không có activities, trả về default
     if (!activities || activities.length === 0) {
@@ -416,10 +529,26 @@ class ChallengeConfig {
         }
         
         const validation = this.validateActivity(activity);
+        
+        // Kiểm tra activity này có thuộc event đặc biệt không
+        const activityIdStr = String(activity.id);
+        const isEventActivity = eventActivityIds.has(activityIdStr);
+        
+        // Tìm thông tin event nếu có
+        let eventInfo = null;
+        if (isEventActivity) {
+          eventInfo = eventActivityMap.get(activityIdStr);
+          console.log('[Event Debug] Activity', activity.name, '(ID:', activityIdStr, ') is linked to event:', eventInfo?.eventName);
+        } else {
+          console.log('[Event Debug] Activity', activity.name, '(ID:', activityIdStr, ') NOT in event set');
+        }
+        
         const enrichedActivity = {
           ...activity,
           validation,
-          dateKey
+          dateKey,
+          isEventActivity, // Đánh dấu thuộc event đặc biệt
+          eventInfo        // Thông tin event (nếu có)
         };
         
         if (validation.activityType === 'run') {
@@ -459,6 +588,10 @@ class ChallengeConfig {
       dayActivities.run.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
       dayActivities.swim.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
       
+      // Kiểm tra ngày này có phải ngày lễ mặc định không (truyền disabledDefaultEvents)
+      const defaultEventCheck = this.isDefaultSpecialEvent(date, gender, disabledDefaultEvents);
+      const isDefaultEventDay = defaultEventCheck.isSpecial;
+      
       // Process run activities
       dayActivities.run.forEach(activity => {
         const originalDist = activity.validation.originalDistance;
@@ -466,15 +599,29 @@ class ChallengeConfig {
         let quotaExceeded = false;
         let quotaRemainder = 0;
         
-        if (dayRunTotal + originalDist > runLimit) {
-          countedDist = Math.max(0, runLimit - dayRunTotal);
-          quotaExceeded = true;
-          quotaRemainder = originalDist - countedDist;
+        // Nếu là event activity HOẶC ngày lễ mặc định -> tính FULL km, không áp dụng quota
+        if (activity.isEventActivity || isDefaultEventDay) {
+          const reason = activity.isEventActivity 
+            ? `EVENT ACTIVITY` 
+            : `DEFAULT HOLIDAY: ${defaultEventCheck.event?.name}`;
+          console.log(`[Event Debug] Activity "${activity.name}" is ${reason} - counting FULL ${originalDist}km`);
+          // countedDist = originalDist (đã set ở trên)
+          // quotaExceeded = false, quotaRemainder = 0
+        } else {
+          // Áp dụng quota bình thường
+          if (dayRunTotal + originalDist > runLimit) {
+            countedDist = Math.max(0, runLimit - dayRunTotal);
+            quotaExceeded = true;
+            quotaRemainder = originalDist - countedDist;
+          }
         }
         
         // Chỉ tính nếu valid
         if (activity.validation.isValid) {
-          dayRunTotal += countedDist;
+          // Event activity hoặc ngày lễ không tính vào dayRunTotal (để không ảnh hưởng quota ngày đó)
+          if (!activity.isEventActivity && !isDefaultEventDay) {
+            dayRunTotal += countedDist;
+          }
           totalRunCounted += countedDist;
         }
         
@@ -485,6 +632,10 @@ class ChallengeConfig {
             countedDistance: activity.validation.isValid ? parseFloat(countedDist.toFixed(2)) : 0,
             quotaExceeded,
             quotaRemainder: parseFloat(quotaRemainder.toFixed(2)),
+            isEventActivity: activity.isEventActivity,
+            isDefaultEventDay,
+            defaultEvent: defaultEventCheck.event,
+            eventInfo: activity.eventInfo,
             dailyQuota: runLimit,
             dayTotalBefore: parseFloat((dayRunTotal - countedDist).toFixed(2))
           }
@@ -498,14 +649,27 @@ class ChallengeConfig {
         let quotaExceeded = false;
         let quotaRemainder = 0;
         
-        if (daySwimTotal + originalDist > swimLimit) {
-          countedDist = Math.max(0, swimLimit - daySwimTotal);
-          quotaExceeded = true;
-          quotaRemainder = originalDist - countedDist;
+        // Nếu là event activity HOẶC ngày lễ mặc định -> tính FULL km, không áp dụng quota
+        if (activity.isEventActivity || isDefaultEventDay) {
+          const reason = activity.isEventActivity 
+            ? `EVENT ACTIVITY` 
+            : `DEFAULT HOLIDAY: ${defaultEventCheck.event?.name}`;
+          console.log(`[Event Debug] Swim "${activity.name}" is ${reason} - counting FULL ${originalDist}km`);
+          // countedDist = originalDist (đã set ở trên)
+        } else {
+          // Áp dụng quota bình thường
+          if (daySwimTotal + originalDist > swimLimit) {
+            countedDist = Math.max(0, swimLimit - daySwimTotal);
+            quotaExceeded = true;
+            quotaRemainder = originalDist - countedDist;
+          }
         }
         
         if (activity.validation.isValid) {
-          daySwimTotal += countedDist;
+          // Event activity hoặc ngày lễ không tính vào daySwimTotal
+          if (!activity.isEventActivity && !isDefaultEventDay) {
+            daySwimTotal += countedDist;
+          }
           totalSwimCounted += countedDist;
         }
         
@@ -516,6 +680,10 @@ class ChallengeConfig {
             countedDistance: activity.validation.isValid ? parseFloat(countedDist.toFixed(2)) : 0,
             quotaExceeded,
             quotaRemainder: parseFloat(quotaRemainder.toFixed(2)),
+            isEventActivity: activity.isEventActivity,
+            isDefaultEventDay,
+            defaultEvent: defaultEventCheck.event,
+            eventInfo: activity.eventInfo,
             dailyQuota: swimLimit,
             dayTotalBefore: parseFloat((daySwimTotal - countedDist).toFixed(2))
           }
