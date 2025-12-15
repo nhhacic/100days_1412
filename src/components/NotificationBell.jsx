@@ -64,6 +64,14 @@ function NotificationBell({ userId }) {
     loadNotifications();
   };
 
+  const handleDeleteNotification = async (notificationId, event) => {
+    event.stopPropagation(); // Ngăn event click lan ra ngoài
+    if (window.confirm('Bạn có chắc muốn xóa thông báo này?')) {
+      await notificationService.deleteNotification(notificationId);
+      loadNotifications();
+    }
+  };
+
   const getPriorityStyles = (priority) => {
     switch (priority) {
       case 'urgent':
@@ -150,16 +158,18 @@ function NotificationBell({ userId }) {
                   return (
                     <div
                       key={notification.id}
-                      className={`p-4 hover:bg-gray-50 cursor-pointer transition-colors ${
+                      className={`p-4 hover:bg-gray-50 transition-colors ${
                         !isRead ? getPriorityStyles(notification.priority) : 'bg-white'
                       }`}
-                      onClick={() => !isRead && handleMarkAsRead(notification.id)}
                     >
                       <div className="flex items-start">
                         <div className="flex-shrink-0 mr-3 text-2xl">
                           {notificationService.getPriorityIcon(notification.priority)}
                         </div>
-                        <div className="flex-1 min-w-0">
+                        <div 
+                          className="flex-1 min-w-0 cursor-pointer"
+                          onClick={() => !isRead && handleMarkAsRead(notification.id)}
+                        >
                           <div className="flex items-center justify-between">
                             <p className={`text-sm font-medium ${!isRead ? 'text-gray-900' : 'text-gray-600'}`}>
                               {notification.title}
@@ -186,6 +196,16 @@ function NotificationBell({ userId }) {
                             )}
                           </div>
                         </div>
+                        {/* Nút xóa - chỉ hiển thị khi đã đọc */}
+                        {isRead && (
+                          <button
+                            onClick={(e) => handleDeleteNotification(notification.id, e)}
+                            className="flex-shrink-0 ml-2 p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                            title="Xóa thông báo"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
