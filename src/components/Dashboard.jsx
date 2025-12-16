@@ -17,8 +17,6 @@ import PushNotificationToggle from './PushNotificationToggle';
 import KPIExceptionRequest from './KPIExceptionRequest';
 import EventActivitySelector from './EventActivitySelector';
 import UserProfile from './UserProfile';
-import UploadBillModal from './UploadBillModal';
-import { collection, query, where, getDocs } from 'firebase/firestore';
 
 
 function Dashboard({ user }) {
@@ -31,6 +29,8 @@ function Dashboard({ user }) {
   const [activities, setActivities] = useState([]);
   // State cho event participations (sự kiện đặc biệt)
   const [eventParticipations, setEventParticipations] = useState([]);
+  // State cho special_events (tất cả sự kiện tuỳ chỉnh đang diễn ra)
+  const [specialEventsToday, setSpecialEventsToday] = useState([]);
   // State cho cài đặt sự kiện mặc định (bật/tắt)
   const [disabledDefaultEvents, setDisabledDefaultEvents] = useState({});
   // State cho accordion tháng
@@ -43,10 +43,6 @@ function Dashboard({ user }) {
   const [showScrollTop, setShowScrollTop] = useState(false);
   // State cho Profile modal
   const [showProfileModal, setShowProfileModal] = useState(false);
-  // State cho modal upload bill
-  const [showUploadBill, setShowUploadBill] = useState(false);
-  const [uploadBillInfo, setUploadBillInfo] = useState(null); // {month, year, amount}
-  const [penaltyPayments, setPenaltyPayments] = useState([]);
 
   // Load event participations của user
   const loadEventParticipations = async () => {
@@ -64,10 +60,70 @@ function Dashboard({ user }) {
           ...docSnap.data()
         });
       });
-      console.log('[Dashboard] Loaded event participations:', participations);
       setEventParticipations(participations);
     } catch (err) {
       console.error('Error loading event participations:', err);
+    }
+  };
+
+  // Load tất cả special_events đang diễn ra hôm nay (hỗ trợ cả string và Firestore Timestamp)
+  const loadSpecialEventsToday = async () => {
+    try {
+      const today = new Date();
+      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+      const todayEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+      const todayStr = today.toISOString().split('T')[0];
+      const q = query(collection(db, 'special_events'));
+      const snapshot = await getDocs(q);
+      const events = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        // Helper: parse Firestore Timestamp or string date
+        function getStartDate(d) {
+          if (d.startDate && typeof d.startDate === 'object' && d.startDate.seconds) {
+            return new Date(d.startDate.seconds * 1000);
+          }
+          if (d.eventStartDate) {
+            return new Date(d.eventStartDate);
+          }
+          return null;
+        }
+        function getEndDate(d) {
+          if (d.endDate && typeof d.endDate === 'object' && d.endDate.seconds) {
+            return new Date(d.endDate.seconds * 1000);
+          }
+          if (d.eventEndDate) {
+            return new Date(d.eventEndDate);
+          }
+          return null;
+        }
+
+        // Ưu tiên kiểm tra timestamp, sau đó đến string
+        const start = getStartDate(data);
+        const end = getEndDate(data);
+        let isActiveToday = false;
+        if (start && end) {
+          isActiveToday = todayEnd >= start && todayStart <= end;
+        } else if (data.eventStartDate && data.eventEndDate) {
+          // Fallback: so sánh string YYYY-MM-DD
+          isActiveToday = todayStr >= data.eventStartDate && todayStr <= data.eventEndDate;
+        }
+        if (isActiveToday) {
+          events.push({
+            name: data.name || data.eventName,
+            description: data.description || data.eventDescription,
+            icon: data.icon || data.eventIcon || '🎉',
+            type: data.eventType || 'custom',
+            color: data.color || data.eventColor || '#a855f7',
+            genderTarget: data.genderTarget,
+            startDate: start,
+            endDate: end,
+          });
+        }
+      });
+      setSpecialEventsToday(events);
+    } catch (err) {
+      console.error('Error loading special_events:', err);
     }
   };
 
@@ -81,25 +137,6 @@ function Dashboard({ user }) {
       }
     } catch (err) {
       console.error('Error loading default events settings:', err);
-    }
-  };
-
-  // Load penalty payments của user
-  const loadPenaltyPayments = async () => {
-    if (!user?.uid) return;
-    try {
-      const q = query(
-        collection(db, 'penalty_payments'),
-        where('userId', '==', user.uid)
-      );
-      const snapshot = await getDocs(q);
-      const payments = [];
-      snapshot.forEach(docSnap => {
-        payments.push({ id: docSnap.id, ...docSnap.data() });
-      });
-      setPenaltyPayments(payments);
-    } catch (err) {
-      console.error('Error loading penalty payments:', err);
     }
   };
 
@@ -138,6 +175,7 @@ function Dashboard({ user }) {
 
     loadUserData();
     loadEventParticipations();
+    loadSpecialEventsToday();
     syncStravaTokens();
     setConfig(challengeConfig.getConfig());
 
@@ -215,6 +253,31 @@ function Dashboard({ user }) {
       const stravaActivities = await stravaService.getActivities();
       setActivities(stravaActivities || []);
       if (stravaActivities && stravaActivities.length > 0) {
+        await stravaService.saveActivitiesToFirebase(user.uid, stravaActivities);
+      }
+      alert('✅ Đã đồng bộ dữ liệu từ Strava!');
+    } catch (error) {
+      alert('❌ Lỗi khi đồng bộ dữ liệu');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // State để lưu processed activities với quota và validation
+  const [processedData, setProcessedData] = useState(null);
+  const [metrics, setMetrics] = useState({
+    runDistance: 0,
+    swimDistance: 0,
+    totalDistance: 0,
+    activityCount: 0,
+    kpiProgress: { run: 0, swim: 0 },
+    penalty: 0,
+    runDeficit: 0,
+    swimDeficit: 0,
+    penaltyDetails: null
+  });
+
+  // Recalculate khi activities hoặc userData hoặc eventParticipations thay đổi
   useEffect(() => {
     if (!userData || activities.length === 0) {
       setMetrics({
@@ -389,8 +452,8 @@ function Dashboard({ user }) {
             </button>
           </div>
           
-          {/* Row 2: Navigation buttons */}
-          <div className="flex items-center justify-between">
+          {/* Row 2: Navigation buttons + Strava/Chấn thương */}
+          <div className="flex items-center justify-between mt-2">
             <div className="flex items-center gap-2">
               <a 
                 href="#/welcome" 
@@ -409,11 +472,34 @@ function Dashboard({ user }) {
                 </a>
               )}
             </div>
-            
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-2">
+              {/* Kết nối Strava/Đồng bộ */}
+              {!stravaConnected ? (
+                <button
+                  onClick={connectStrava}
+                  className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm"
+                >
+                  Kết nối Strava
+                </button>
+              ) : (
+                <button
+                  onClick={syncActivities}
+                  className="bg-gradient-to-r from-blue-500 to-green-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm"
+                >
+                  <RefreshCw className="inline w-4 h-4 mr-1" />
+                  Đồng bộ
+                </button>
+              )}
+              {/* Gửi yêu cầu chấn thương */}
+              <button
+                onClick={() => setShowExceptionModal(true)}
+                className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm"
+              >
+                <Heart className="inline w-4 h-4 mr-1" />
+                Báo cáo
+              </button>
               {/* Notification Bell */}
               <NotificationBell userId={user?.uid} />
-              
               <button
                 onClick={() => { if (window.confirm('Bạn có chắc muốn đăng xuất không?')) auth.signOut(); }}
                 className="flex items-center bg-white/90 text-gray-700 hover:bg-white px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-sm"
@@ -432,19 +518,57 @@ function Dashboard({ user }) {
           <PushNotificationToggle userId={user?.uid} />
         </div>
 
-        {/* Banner ngày lễ mặc định */}
+        {/* Banner sự kiện đặc biệt hoặc tuỳ chỉnh */}
         {(() => {
+          // Sự kiện đặc biệt mặc định
           const todayEvents = challengeConfig.getTodayDefaultEvents(userData?.gender || 'male');
-          if (todayEvents.length > 0) {
+          // Lấy ngày hôm nay (UTC 0:00 - 23:59)
+          const now = new Date();
+          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+          const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+          // Helper: parse Firestore Timestamp or string date
+          function getEventStartDate(evt) {
+            if (evt.startDate && typeof evt.startDate === 'object' && evt.startDate.seconds) {
+              return new Date(evt.startDate.seconds * 1000);
+            }
+            if (evt.eventStartDate) {
+              // Try parse string
+              return new Date(evt.eventStartDate);
+            }
+            return null;
+          }
+          function getEventEndDate(evt) {
+            if (evt.endDate && typeof evt.endDate === 'object' && evt.endDate.seconds) {
+              return new Date(evt.endDate.seconds * 1000);
+            }
+            if (evt.eventEndDate) {
+              // Try parse string
+              return new Date(evt.eventEndDate);
+            }
+            return null;
+          }
+
+          // Lọc specialEventsToday: chỉ lấy sự kiện đang diễn ra hôm nay (hỗ trợ cả timestamp và string)
+          const filteredSpecialEvents = (specialEventsToday || []).filter(evt => {
+            const start = getEventStartDate(evt);
+            const end = getEventEndDate(evt);
+            if (!start || !end) return false;
+            // Sự kiện đang diễn ra nếu hôm nay nằm trong khoảng [start, end]
+            return todayEnd >= start && todayStart <= end;
+          });
+
+          const allEvents = [...todayEvents, ...filteredSpecialEvents];
+          if (allEvents.length > 0) {
             return (
               <div className="mb-6 p-4 bg-gradient-to-r from-yellow-100 to-orange-100 border border-yellow-300 rounded-xl shadow-sm">
                 <div className="flex items-start gap-3">
                   <span className="text-3xl">🎉</span>
                   <div className="flex-1">
                     <h3 className="font-bold text-orange-800 text-lg mb-1">
-                      Hôm nay là ngày lễ đặc biệt!
+                      Hôm nay đang có sự kiện!
                     </h3>
-                    {todayEvents.map((evt, idx) => (
+                    {allEvents.map((evt, idx) => (
                       <div key={idx} className="mb-2 last:mb-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xl">{evt.icon}</span>
@@ -471,76 +595,6 @@ function Dashboard({ user }) {
           }
           return null;
         })()}
-
-        {/* Strava Connection + Báo cáo chấn thương */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          {/* Strava Connection */}
-          <div className="bg-white rounded-xl shadow p-4 md:p-6">
-            <div className="flex flex-col gap-3">
-              <div>
-                <h3 className="text-base md:text-lg font-bold text-gray-900 mb-1">🔗 Kết nối Strava</h3>
-                <p className="text-sm text-gray-600">
-                  {stravaConnected 
-                    ? '✅ Đã kết nối với Strava' 
-                    : '❌ Chưa kết nối với Strava'}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {!stravaConnected && (
-                  <button
-                    onClick={connectStrava}
-                    className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm"
-                  >
-                    Kết nối Strava
-                  </button>
-                )}
-                <button
-                  onClick={syncActivities}
-                  disabled={!stravaConnected}
-                  className={`px-4 py-2 rounded-lg font-medium transition shadow text-sm ${
-                    stravaConnected
-                      ? 'bg-blue-600 text-white hover:bg-blue-700'
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
-                >
-                  <RefreshCw className="inline w-4 h-4 mr-1" />
-                  Đồng bộ
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Báo cáo chấn thương / Ốm */}
-          <div className="bg-gradient-to-br from-orange-50 to-red-50 border border-orange-200 rounded-xl shadow p-4 md:p-6">
-            <div className="flex flex-col gap-3">
-              <div>
-                <h3 className="text-base md:text-lg font-bold text-orange-800 mb-1">🩹 Báo cáo chấn thương / Ốm</h3>
-                <p className="text-sm text-orange-700">
-                  Gửi yêu cầu giảm KPI nếu bạn gặp vấn đề sức khỏe
-                </p>
-              </div>
-              <button
-                onClick={() => setShowExceptionModal(true)}
-                className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm w-fit"
-              >
-                <Heart className="inline w-4 h-4 mr-1" />
-                Gửi yêu cầu
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Sự kiện đặc biệt - Gán activity vào sự kiện từ thiện */}
-        <div className="mb-6">
-          <EventActivitySelector 
-            user={user} 
-            activities={activities}
-            onActivityLinked={() => {
-              syncActivities();
-              loadEventParticipations(); // Reload event participations để tính lại
-            }}
-          />
-        </div>
 
         {/* Stats Overview - Gộp stat + progress bar cùng loại */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6">
