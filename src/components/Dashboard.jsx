@@ -78,6 +78,7 @@ function Dashboard({ user }) {
       const events = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
+        console.debug('loadSpecialEventsToday doc:', docSnap.id, data);
         // Helper: parse Firestore Timestamp or string date
         function getStartDate(d) {
           if (d.startDate && typeof d.startDate === 'object' && d.startDate.seconds) {
@@ -108,8 +109,9 @@ function Dashboard({ user }) {
           // Fallback: so sánh string YYYY-MM-DD
           isActiveToday = todayStr >= data.eventStartDate && todayStr <= data.eventEndDate;
         }
-        if (isActiveToday) {
+        if (isActiveToday && data.isActive !== false) {
           events.push({
+            id: docSnap.id,
             name: data.name || data.eventName,
             description: data.description || data.eventDescription,
             icon: data.icon || data.eventIcon || '🎉',
@@ -121,6 +123,7 @@ function Dashboard({ user }) {
           });
         }
       });
+      console.debug('loadSpecialEventsToday filtered events:', events);
       setSpecialEventsToday(events);
     } catch (err) {
       console.error('Error loading special_events:', err);
@@ -518,83 +521,19 @@ function Dashboard({ user }) {
           <PushNotificationToggle userId={user?.uid} />
         </div>
 
-        {/* Banner sự kiện đặc biệt hoặc tuỳ chỉnh */}
-        {(() => {
-          // Sự kiện đặc biệt mặc định
-          const todayEvents = challengeConfig.getTodayDefaultEvents(userData?.gender || 'male');
-          // Lấy ngày hôm nay (UTC 0:00 - 23:59)
-          const now = new Date();
-          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-          const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+        {/* Banner sự kiện: dùng EventActivitySelector làm banner chính */}
+        <div className="mb-6">
+          <EventActivitySelector
+            user={user}
+            activities={activities}
+            onActivityLinked={() => {
+              loadEventParticipations();
+              loadSpecialEventsToday();
+            }}
+          />
+        </div>
 
-          // Helper: parse Firestore Timestamp or string date
-          function getEventStartDate(evt) {
-            if (evt.startDate && typeof evt.startDate === 'object' && evt.startDate.seconds) {
-              return new Date(evt.startDate.seconds * 1000);
-            }
-            if (evt.eventStartDate) {
-              // Try parse string
-              return new Date(evt.eventStartDate);
-            }
-            return null;
-          }
-          function getEventEndDate(evt) {
-            if (evt.endDate && typeof evt.endDate === 'object' && evt.endDate.seconds) {
-              return new Date(evt.endDate.seconds * 1000);
-            }
-            if (evt.eventEndDate) {
-              // Try parse string
-              return new Date(evt.eventEndDate);
-            }
-            return null;
-          }
-
-          // Lọc specialEventsToday: chỉ lấy sự kiện đang diễn ra hôm nay (hỗ trợ cả timestamp và string)
-          const filteredSpecialEvents = (specialEventsToday || []).filter(evt => {
-            const start = getEventStartDate(evt);
-            const end = getEventEndDate(evt);
-            if (!start || !end) return false;
-            // Sự kiện đang diễn ra nếu hôm nay nằm trong khoảng [start, end]
-            return todayEnd >= start && todayStart <= end;
-          });
-
-          const allEvents = [...todayEvents, ...filteredSpecialEvents];
-          if (allEvents.length > 0) {
-            return (
-              <div className="mb-6 p-4 bg-gradient-to-r from-yellow-100 to-orange-100 border border-yellow-300 rounded-xl shadow-sm">
-                <div className="flex items-start gap-3">
-                  <span className="text-3xl">🎉</span>
-                  <div className="flex-1">
-                    <h3 className="font-bold text-orange-800 text-lg mb-1">
-                      Hôm nay đang có sự kiện!
-                    </h3>
-                    {allEvents.map((evt, idx) => (
-                      <div key={idx} className="mb-2 last:mb-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xl">{evt.icon}</span>
-                          <span className="font-semibold text-orange-700">{evt.name}</span>
-                          {evt.genderTarget === 'female' && (
-                            <span className="px-2 py-0.5 text-xs bg-pink-500 text-white rounded-full">Dành cho nữ</span>
-                          )}
-                          {evt.genderTarget === 'male' && (
-                            <span className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded-full">Dành cho nam</span>
-                          )}
-                        </div>
-                        <p className="text-sm text-orange-600 ml-7">{evt.description}</p>
-                      </div>
-                    ))}
-                    <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded-lg">
-                      <p className="text-sm text-green-700 font-medium">
-                        ✨ Tất cả tracklog hôm nay được tính <strong>FULL km</strong>, không giới hạn!
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          }
-          return null;
-        })()}
+        {/* EventActivitySelector is rendered above as the single banner */}
 
         {/* Stats Overview - Gộp stat + progress bar cùng loại */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6">

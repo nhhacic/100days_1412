@@ -8,7 +8,7 @@ import {
   X, ChevronDown, ChevronUp, Award
 } from 'lucide-react';
 
-function EventActivitySelector({ user, activities, onClose, onActivityLinked }) {
+function EventActivitySelector({ user, activities, onClose, onActivityLinked, initialEventId, modalOnly = false }) {
   const [events, setEvents] = useState([]);
   const [myParticipations, setMyParticipations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -23,6 +23,19 @@ function EventActivitySelector({ user, activities, onClose, onActivityLinked }) 
   useEffect(() => {
     loadData();
   }, [user]);
+
+  useEffect(() => {
+    // If parent passes an initialEventId, and events already loaded, try to open modal for that event
+    if (initialEventId && events.length > 0) {
+      const found = events.find(e => e.id === initialEventId);
+      if (found) {
+        setSelectedEvent(found);
+        setSelectedActivity(null);
+        setShowModal(true);
+        setExpanded(true);
+      }
+    }
+  }, [initialEventId, events]);
 
   const loadData = async () => {
     setLoading(true);
@@ -271,125 +284,123 @@ function EventActivitySelector({ user, activities, onClose, onActivityLinked }) 
 
   return (
     <>
-      {/* Compact view - mặc định */}
-      <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg overflow-hidden">
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="w-full p-3 flex items-center justify-between text-left hover:bg-yellow-100/50 transition"
-        >
-          <div className="flex items-center">
-            <Star className="w-5 h-5 text-yellow-600 mr-2" />
-            <div>
-              <span className="font-medium text-gray-900 text-sm">Sự kiện Đặc biệt</span>
-              <span className="text-xs text-gray-600 ml-2">
-                ({availableEventsCount} sự kiện có thể tham gia)
-              </span>
+      {!modalOnly && (
+        /* Compact view - mặc định */
+        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg overflow-hidden event-banner-animate event-banner-glow event-banner-fireworks">
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="w-full p-3 flex items-center justify-between text-left hover:bg-yellow-100/50 transition"
+          >
+            <div className="flex items-center">
+              <span className="text-yellow-600 mr-2 text-xl">🎉</span>
+              <div>
+                <span className="font-medium text-gray-900 text-sm">Sự kiện Đặc biệt</span>
+                <span className="text-xs text-gray-600 ml-2">
+                  ({availableEventsCount} sự kiện có thể tham gia)
+                </span>
+              </div>
             </div>
-          </div>
-          <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${expanded ? 'rotate-180' : ''}`} />
-        </button>
+            <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          </button>
 
-        {/* Expanded content */}
-        {expanded && (
-          <div className="px-3 pb-3 border-t border-yellow-200">
-            {/* Danh sách sự kiện */}
-            <div className="mt-3 space-y-3">
-              {events.map(event => {
-                const alreadyParticipated = myParticipations.some(p => p.eventId === event.id);
-                const participation = myParticipations.find(p => p.eventId === event.id);
-                return (
-                  <div
-                    key={event.id}
-                    className={`p-4 rounded-lg border ${
-                      alreadyParticipated 
-                        ? 'bg-green-50 border-green-200' 
-                        : 'bg-white border-gray-200'
-                    }`}
-                  >
-                    {/* Header */}
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-base">{event.name}</span>
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                            event.activityType === 'swim' ? 'bg-cyan-100 text-cyan-700' :
-                            event.activityType === 'run' ? 'bg-green-100 text-green-700' :
-                            'bg-purple-100 text-purple-700'
-                          }`}>
-                            {event.activityType === 'swim' ? '🏊 Bơi' : event.activityType === 'run' ? '🏃 Chạy' : '🏊🏃 Cả hai'}
-                          </span>
-                          <span className={`px-2 py-0.5 rounded text-xs ${
-                            event.eventType === 'charity_event' 
-                              ? 'bg-red-100 text-red-700' 
-                              : 'bg-orange-100 text-orange-700'
-                          }`}>
-                            {event.eventType === 'charity_event' ? '❤️ Từ thiện' : '🏆 Giải đấu'}
-                          </span>
+          {/* Expanded content */}
+          {expanded && (
+            <div className="px-3 pb-3 border-t border-yellow-200">
+              {/* Danh sách sự kiện */}
+              <div className="mt-3 space-y-3">
+                {events.map(event => {
+                  const alreadyParticipated = myParticipations.some(p => p.eventId === event.id);
+                  const participation = myParticipations.find(p => p.eventId === event.id);
+                  return (
+                    <div
+                      key={event.id}
+                      className={`p-4 rounded-lg border ${
+                        alreadyParticipated 
+                          ? 'bg-green-50 border-green-200' 
+                          : 'bg-white border-gray-200'
+                      }`}
+                    >
+                      {/* Header */}
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-base">{event.name}</span>
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                              event.activityType === 'swim' ? 'bg-cyan-100 text-cyan-700' :
+                              event.activityType === 'run' ? 'bg-green-100 text-green-700' :
+                              'bg-purple-100 text-purple-700'
+                            }`}>
+                              {event.activityType === 'swim' ? '🏊 Bơi' : event.activityType === 'run' ? '🏃 Chạy' : '🏊🏃 Cả hai'}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded text-xs ${
+                              event.eventType === 'charity_event' 
+                                ? 'bg-red-100 text-red-700' 
+                                : 'bg-orange-100 text-orange-700'
+                            }`}>
+                              {event.eventType === 'charity_event' ? '❤️ Từ thiện' : '🏆 Giải đấu'}
+                            </span>
+                          </div>
+                          
+                          {/* Thời gian */}
+                          <div className="text-sm text-gray-600 mt-2 flex items-center">
+                            <Calendar className="w-4 h-4 mr-1" />
+                            <span className="font-medium">Thời gian:</span>
+                            <span className="ml-1">{formatDate(event.startDate)} - {formatDate(event.endDate)}</span>
+                          </div>
+                          
+                          {/* Mô tả */}
+                          {event.description && (
+                            <p className="text-sm text-gray-700 mt-2 bg-gray-50 p-2 rounded">
+                              📝 {event.description}
+                            </p>
+                          )}
                         </div>
-                        
-                        {/* Thời gian */}
-                        <div className="text-sm text-gray-600 mt-2 flex items-center">
-                          <Calendar className="w-4 h-4 mr-1" />
-                          <span className="font-medium">Thời gian:</span>
-                          <span className="ml-1">{formatDate(event.startDate)} - {formatDate(event.endDate)}</span>
-                        </div>
-                        
-                        {/* Mô tả */}
-                        {event.description && (
-                          <p className="text-sm text-gray-700 mt-2 bg-gray-50 p-2 rounded">
-                            📝 {event.description}
-                          </p>
+                      </div>
+
+                      {/* Status / Action */}
+                        <div className="mt-3 pt-3 border-t border-gray-100">
+                          {alreadyParticipated ? (
+                          <div className="flex items-center justify-between bg-green-100 p-2 rounded-lg">
+                            <div className="flex items-center text-green-700">
+                              <CheckCircle className="w-5 h-5 mr-2" />
+                              <div>
+                                <span className="font-medium text-sm">Đã đăng ký</span>
+                                {participation && (
+                                  <span className="text-xs ml-2">
+                                    ({participation.activityName} - {formatDistance(participation.distance)} km)
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          ) : (
+                          <div className="flex items-center justify-between">
+                            <p className="mt-0 p-2 bg-blue-50 rounded text-xs text-blue-700">
+                              💡 Activity được gán sẽ tính <strong>full km</strong> (không giới hạn quota)
+                            </p>
+                            <button
+                              onClick={() => {
+                                setSelectedEvent(event);
+                                setSelectedActivity(null);
+                                setError('');
+                                setShowModal(true);
+                              }}
+                              className="px-4 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white text-sm rounded-lg hover:opacity-90 font-medium shadow"
+                            >
+                              Gán activity
+                            </button>
+                          </div>
                         )}
                       </div>
                     </div>
-
-                    {/* Status / Action */}
-                    <div className="mt-3 pt-3 border-t border-gray-100">
-                      {alreadyParticipated ? (
-                        <div className="flex items-center justify-between bg-green-100 p-2 rounded-lg">
-                          <div className="flex items-center text-green-700">
-                            <CheckCircle className="w-5 h-5 mr-2" />
-                            <div>
-                              <span className="font-medium text-sm">Đã đăng ký</span>
-                              {participation && (
-                                <span className="text-xs ml-2">
-                                  ({participation.activityName} - {formatDistance(participation.distance)} km)
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs text-gray-500">
-                            💡 Activity được gán sẽ tính <strong>full km</strong> (không giới hạn quota)
-                          </p>
-                          <button
-                            onClick={() => {
-                              setSelectedEvent(event);
-                              setSelectedActivity(null);
-                              setError('');
-                              setShowModal(true);
-                            }}
-                            className="px-4 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-white text-sm rounded-lg hover:opacity-90 font-medium shadow"
-                          >
-                            Gán activity
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+              
             </div>
-
-            {/* Ghi chú */}
-            <div className="mt-3 p-2 bg-blue-50 rounded text-xs text-blue-700">
-              💡 Activity được gán vào sự kiện sẽ tính <strong>full km</strong> (không giới hạn quota)
-            </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* Modal gán activity */}
       {showModal && selectedEvent && (
