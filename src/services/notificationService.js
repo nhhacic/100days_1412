@@ -1,4 +1,5 @@
 import { db } from './firebase';
+import { formatDate } from '../utils/formatDate';
 import { 
   collection, doc, addDoc, getDocs, getDoc, updateDoc, deleteDoc,
   query, where, orderBy, limit, serverTimestamp, arrayUnion, onSnapshot
@@ -265,7 +266,7 @@ class NotificationService {
     if (hours < 24) return `${hours} giờ trước`;
     if (days < 7) return `${days} ngày trước`;
     
-    return date.toLocaleDateString('vi-VN');
+    return formatDate(date);
   }
 
   // Lấy màu theo priority

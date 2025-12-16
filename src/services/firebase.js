@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app';
+import { formatDate } from '../utils/formatDate';
 import { getFirestore, doc, setDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
@@ -122,8 +123,8 @@ export const presenceService = {
     if (diffMinutes < 60) return `${diffMinutes} phút trước`;
     if (diffHours < 24) return `${diffHours} giờ trước`;
     if (diffDays < 7) return `${diffDays} ngày trước`;
-    
-    return lastActive.toLocaleDateString('vi-VN');
+
+    return formatDate(lastActive);
   }
 };
 

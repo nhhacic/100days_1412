@@ -7,6 +7,7 @@ import {
   Star, Calendar, Waves, Footprints, CheckCircle, AlertCircle, 
   X, ChevronDown, ChevronUp, Award
 } from 'lucide-react';
+import { formatDate as formatDateHelper } from '../utils/formatDate';
 
 function EventActivitySelector({ user, activities, onClose, onActivityLinked, initialEventId, modalOnly = false }) {
   const [events, setEvents] = useState([]);
@@ -315,11 +316,7 @@ function EventActivitySelector({ user, activities, onClose, onActivityLinked, in
 
   const formatDate = (date) => {
     if (!date) return '-';
-    return new Date(date).toLocaleDateString('vi-VN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
+    return formatDateHelper(date);
   };
 
   const formatDistance = (meters) => {

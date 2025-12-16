@@ -176,11 +176,17 @@ class ChallengeConfig {
   }
   
   formatDate(date) {
-    return new Date(date).toLocaleDateString('vi-VN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
+    // Normalize to DD/MM/YYYY for display
+    try {
+      const d = new Date(date);
+      if (isNaN(d)) return '';
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      return `${dd}/${mm}/${yyyy}`;
+    } catch (err) {
+      return '';
+    }
   }
   
   /**

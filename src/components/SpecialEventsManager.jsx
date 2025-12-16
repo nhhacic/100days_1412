@@ -9,6 +9,7 @@ import {
   Save, X, CheckCircle, AlertCircle, Clock, Users, Award,
   ChevronDown, ChevronUp, Eye, Sparkles, ToggleLeft, ToggleRight
 } from 'lucide-react';
+import { formatDate as formatDateHelper } from '../utils/formatDate';
 
 // Loại sự kiện
 const EVENT_TYPES = {
@@ -483,11 +484,7 @@ function SpecialEventsManager() {
 
   const formatDate = (date) => {
     if (!date) return '-';
-    return date.toLocaleDateString('vi-VN', { 
-      day: '2-digit', 
-      month: '2-digit', 
-      year: 'numeric' 
-    });
+    return formatDateHelper(date);
   };
 
   if (loading) {
@@ -988,7 +985,7 @@ function SpecialEventsManager() {
                                     </div>
                                   </div>
                                   <span className="text-xs text-gray-400">
-                                    {p.assignedAt.toLocaleDateString('vi-VN')}
+                                    {formatDate(p.assignedAt)}
                                   </span>
                                 </div>
                                 {p.activityName && (

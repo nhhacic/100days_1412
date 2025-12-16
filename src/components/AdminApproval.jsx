@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { formatDate } from '../utils/formatDate';
 import { db, auth } from '../services/firebase';
 import { 
   collection, query, where, getDocs, updateDoc, doc,
@@ -65,12 +66,8 @@ function AdminApproval() {
           id: docSnap.id,
           ...data,
           createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt),
-          formattedDate: data.createdAt?.toDate ? 
-            data.createdAt.toDate().toLocaleDateString('vi-VN') : 
-            new Date(data.createdAt).toLocaleDateString('vi-VN'),
-          approvedAt: data.approvedAt?.toDate ? 
-            data.approvedAt.toDate().toLocaleDateString('vi-VN') : 
-            data.approvedAt ? new Date(data.approvedAt).toLocaleDateString('vi-VN') : null
+          formattedDate: formatDate(data.createdAt?.toDate ? data.createdAt.toDate() : new Date(data.createdAt)),
+          approvedAt: data.approvedAt ? formatDate(data.approvedAt?.toDate ? data.approvedAt.toDate() : new Date(data.approvedAt)) : null
         });
         
         if (data.status === 'pending_approval') pendingCount++;
@@ -594,7 +591,7 @@ function AdminApproval() {
                       <p className="text-sm text-gray-600">Ngày bắt đầu</p>
                       <p className="font-medium">
                         {selectedUser.challengeStart?.toDate ? 
-                          selectedUser.challengeStart.toDate().toLocaleDateString('vi-VN') : 
+                          formatDate(selectedUser.challengeStart.toDate()) : 
                           'Chưa có'}
                       </p>
                     </div>

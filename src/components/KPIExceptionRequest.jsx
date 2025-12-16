@@ -6,6 +6,7 @@ import {
   AlertCircle, Camera, Upload, X, Clock, CheckCircle, XCircle,
   Heart, Thermometer, Calendar, FileText, Send, ChevronDown, ChevronUp
 } from 'lucide-react';
+import { formatDate } from '../utils/formatDate';
 
 // Các loại exception
 const EXCEPTION_TYPES = {
@@ -391,7 +392,7 @@ function KPIExceptionRequest({ user, onClose }) {
                         </>
                       ) : (
                         <>
-                          {req.startDate?.toLocaleDateString('vi-VN')} - {req.endDate?.toLocaleDateString('vi-VN')}
+                          {formatDate(req.startDate)} - {formatDate(req.endDate)}
                           {req.status === 'approved' && <span className="ml-2 text-green-600">• Giảm {req.approvedReduction || req.reductionPercent}% KPI</span>}
                         </>
                       )}

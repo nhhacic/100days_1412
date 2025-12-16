@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import NotificationManager from './NotificationManager';
 import SpecialEventsManager from './SpecialEventsManager';
+import { formatDate, formatDateTime, formatMonthYear } from '../utils/formatDate';
 
 function AdminIntegratedDashboard({ limitedMode = false }) {
   const navigate = useNavigate();
@@ -232,7 +233,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
         if (parts.length === 2) {
           const y = parseInt(parts[0], 10);
           const mIndex = parseInt(parts[1], 10) - 1;
-          monthName = new Date(y, mIndex, 1).toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' });
+          monthName = formatMonthYear(new Date(y, mIndex, 1));
         }
         return { monthKey: k, monthName, penalty: totalPenaltyByMonth[k] };
       });
@@ -386,7 +387,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
       const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
       monthlyDetails.push({
         monthKey,
-        monthName: new Date(year, month, 1).toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' }),
+        monthName: formatMonthYear(new Date(year, month, 1)),
         runDistance: summary.totalRunCounted,
         swimDistance: summary.totalSwimCounted,
         runDeficit: summary.finalRunDeficit,
@@ -508,7 +509,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
       });
       
       chartData.push({
-        date: date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }),
+        date: formatDate(date),
         run: parseFloat(runKm.toFixed(1)),
         swim: parseFloat(swimKm.toFixed(1)),
         total: parseFloat((runKm + swimKm).toFixed(1))
@@ -1021,13 +1022,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
   const formatCurrency = (amount) => 
     new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
 
-  const formatDate = (date) => 
-    date ? date.toLocaleDateString('vi-VN') : 'N/A';
-
-  const formatDateTime = (dateStr) => {
-    const date = new Date(dateStr);
-    return date.toLocaleString('vi-VN');
-  };
+  // Use centralized helpers for consistent DD/MM/YYYY formatting
 
   const getStatusBadge = (status) => {
     switch(status) {
@@ -1522,7 +1517,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
             </div>
 
             {/* Users List - Mobile Friendly */}
-            <div className="bg-white rounded-xl shadow overflow-hidden">
+            <div className="bg-gray-50 rounded-xl shadow overflow-hidden p-4">
               {loading ? (
                 <div className="p-8 text-center">
                   <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
@@ -1536,9 +1531,9 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
               ) : (
                 <>
                   {/* Mobile Card View */}
-                  <div className="divide-y divide-gray-200">
-                    {currentUsers.map((user) => (
-                      <div key={user.id} className="p-4 hover:bg-gray-50">
+                  <div className="space-y-4">
+                    {currentUsers.map((user, idx) => (
+                      <div key={user.id} className={`p-4 transition-colors mb-0 rounded-lg border bg-white border-gray-300 shadow-sm hover:shadow-md`}>
                         {/* Header: Avatar + Name + Checkbox */}
                         <div className="flex items-start gap-3">
                           <input
@@ -1639,7 +1634,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
                                 <div className="mt-1 text-xs text-gray-500 space-y-0.5">
                                   {user.metrics.allMonthsPenalty.months.map((m, idx) => (
                                     <div key={idx} className="flex justify-between">
-                                      <span>{m.monthKey}:</span>
+                                      <span>{m.monthName || (m.monthKey ? formatMonthYear(new Date(m.monthKey + '-01')) : m.monthKey)}:</span>
                                       <span className={m.penalty > 0 ? 'text-red-500' : 'text-green-500'}>
                                         {m.penalty > 0 ? formatCurrency(m.penalty) : '✓'}
                                       </span>

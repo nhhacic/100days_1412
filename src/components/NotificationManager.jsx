@@ -7,6 +7,7 @@ import {
 import { db } from '../services/firebase';
 import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import notificationService from '../services/notificationService';
+import { formatDateTime } from '../utils/formatDate';
 
 function NotificationManager({ currentUser }) {
   const [notifications, setNotifications] = useState([]);
@@ -498,10 +499,10 @@ function NotificationManager({ currentUser }) {
               <h4 className="text-xl font-bold mb-2">{selectedNotification.title}</h4>
               <p className="text-gray-600 mb-4">{selectedNotification.message}</p>
               
-              <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm mb-4">
+                <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm mb-4">
                 <div className="flex justify-between">
                   <span className="text-gray-500">Thời gian:</span>
-                  <span>{selectedNotification.createdAt?.toLocaleString('vi-VN')}</span>
+                  <span>{formatDateTime(selectedNotification.createdAt)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Người tạo:</span>
