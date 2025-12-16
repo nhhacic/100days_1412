@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route } from 'react-router-dom';
-import { auth } from './services/firebase';
+import { auth, db } from './services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { getDoc, doc as firestoreDoc } from 'firebase/firestore';
 
 // Components
 import Welcome from './components/Welcome';
@@ -23,8 +24,44 @@ function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       console.log('Auth state:', firebaseUser ? firebaseUser.email : 'No user');
-      setUser(firebaseUser);
-      setLoading(false);
+      if (!firebaseUser) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      // Fetch user profile from Firestore to check approval status
+      (async () => {
+        try {
+          const userRef = firestoreDoc(db, 'users', firebaseUser.uid);
+          const snap = await getDoc(userRef);
+          if (!snap.exists()) {
+            // No profile yet - prevent access until admin creates/approves
+            console.warn('No user profile found for', firebaseUser.uid);
+            await auth.signOut();
+            setUser(null);
+            alert('Tài khoản chưa được cấu hình. Vui lòng chờ admin phê duyệt.');
+          } else {
+            const data = snap.data();
+            if (data.status !== 'approved') {
+              // Not approved - sign out
+              console.warn('User not approved:', data.status);
+              await auth.signOut();
+              setUser(null);
+              alert('Tài khoản của bạn đang chờ phê duyệt. Vui lòng chờ admin duyệt.');
+            } else {
+              // Approved - set user with profile
+              setUser({ ...firebaseUser, profile: data });
+            }
+          }
+        } catch (err) {
+          console.error('Error checking user profile:', err);
+          // Fallback: allow login but set firebaseUser
+          setUser(firebaseUser);
+        } finally {
+          setLoading(false);
+        }
+      })();
     });
 
     return unsubscribe;
@@ -77,7 +114,7 @@ function App() {
           } />
 
           {/* User-facing copy of admin dashboard */}
-          <Route path="/user-admin-dashboard" element={
+          <Route path="/users-dashboard" element={
             user ? <UserAdminDashboard /> : <Login />
           } />
           

@@ -144,20 +144,27 @@ function Dashboard({ user }) {
   };
 
   useEffect(() => {
-    const loadUserData = async () => {
+    const loadEverything = async () => {
       if (!user) return;
-      
+
       try {
+        // First, sync Strava tokens from Firestore for the current user so we don't accidentally use another user's tokens in localStorage
+        const authenticated = await stravaService.syncTokensFromFirebase(user.uid);
+        setStravaConnected(authenticated);
+
+        // Then load user profile
         const userDoc = await getDoc(doc(db, 'users', user.uid));
         if (userDoc.exists()) {
           const data = userDoc.data();
           setUserData(data);
-          
+
           const isUserAdmin = data.role === 'admin' || data.role === 'super_admin' || data.email === 'admin@example.com' || data.email === 'admin@challenge.com' || data.email === 'superadmin@challenge.com';
           setIsAdmin(isUserAdmin);
-          
-          if (data.status === 'approved' && data.isActive) {
-            loadActivities();
+
+          // Only load activities if user is approved/active AND they have a Strava connection (either tokens authenticated or stored athlete)
+          const hasStravaConnection = authenticated || !!data.strava_athlete || !!data.strava_access_token;
+          if (data.status === 'approved' && data.isActive && hasStravaConnection) {
+            await loadActivities();
           }
         }
       } catch (error) {
@@ -166,20 +173,10 @@ function Dashboard({ user }) {
         setLoading(false);
       }
     };
-    
 
-    // Khi user login, luôn sync token từ Firestore về localStorage
-    const syncStravaTokens = async () => {
-      if (user) {
-        const authenticated = await stravaService.syncTokensFromFirebase(user.uid);
-        setStravaConnected(authenticated);
-      }
-    };
-
-    loadUserData();
+    loadEverything();
     loadEventParticipations();
     loadSpecialEventsToday();
-    syncStravaTokens();
     setConfig(challengeConfig.getConfig());
 
     // Bắt đầu theo dõi presence (online status)
@@ -467,11 +464,11 @@ function Dashboard({ user }) {
               </a>
               {!isAdmin && (
                 <a
-                  href="#/user-admin-dashboard"
+                  href="#/users-dashboard"
                   className="flex items-center bg-indigo-500 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-sm font-medium transition"
                 >
-                  <User className="w-4 h-4 mr-1" />
-                  <span className="hidden sm:inline">Giao diện Admin</span>
+                  <Users className="w-4 h-4 mr-1" />
+                  <span className="hidden sm:inline">Theo dõi đồng bọn</span>
                 </a>
               )}
               {isAdmin && (
@@ -489,26 +486,33 @@ function Dashboard({ user }) {
               {!stravaConnected ? (
                 <button
                   onClick={connectStrava}
-                  className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm"
+                  className="flex items-center bg-gradient-to-r from-orange-500 to-red-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition shadow"
+                  title="Kết nối Strava"
                 >
-                  Kết nối Strava
+                  <svg className="w-4 h-4 mr-0 sm:mr-1 text-white" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                    <path d="M3 21L9.5 3h2.5l6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M9.5 3l1.8 6.5L12.9 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <span className="ml-1">Kết nối Strava</span>
                 </button>
               ) : (
                 <button
                   onClick={syncActivities}
-                  className="bg-gradient-to-r from-blue-500 to-green-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm"
+                  className="flex items-center bg-gradient-to-r from-blue-500 to-green-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition shadow"
+                  title="Đồng bộ"
                 >
-                  <RefreshCw className="inline w-4 h-4 mr-1" />
-                  Đồng bộ
+                  <RefreshCw className="w-4 h-4 mr-0 sm:mr-1" />
+                  <span className="hidden sm:inline ml-1">Đồng bộ</span>
                 </button>
               )}
               {/* Gửi yêu cầu chấn thương */}
               <button
                 onClick={() => setShowExceptionModal(true)}
-                className="bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 rounded-lg font-medium hover:opacity-90 transition shadow text-sm"
+                className="flex items-center bg-gradient-to-r from-orange-500 to-red-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition shadow"
+                title="Báo cáo"
               >
-                <Heart className="inline w-4 h-4 mr-1" />
-                Báo cáo
+                <Heart className="w-4 h-4 mr-0 sm:mr-1" />
+                <span className="hidden sm:inline ml-1">Báo cáo</span>
               </button>
               {/* Notification Bell */}
               <NotificationBell userId={user?.uid} />

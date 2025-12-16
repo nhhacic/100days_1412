@@ -57,7 +57,8 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
   const [showBulkMessageModal, setShowBulkMessageModal] = useState(false);
   const [bulkMessage, setBulkMessage] = useState({ title: '', content: '', priority: 'normal' });
   const [search, setSearch] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 12;
+  const [visibleCount, setVisibleCount] = useState(itemsPerPage);
   const [selectedUser, setSelectedUser] = useState(null);
   const [selectedUserActivities, setSelectedUserActivities] = useState([]);
   const [selectedUserMonthlyStats, setSelectedUserMonthlyStats] = useState([]);
@@ -86,7 +87,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
     conversion: config.conversion
   });
 
-  const itemsPerPage = 12;
+  
 
   useEffect(() => {
     const initializeData = async () => {
@@ -632,7 +633,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
     }
     
     setFilteredUsers(filtered);
-    setCurrentPage(1);
+    setVisibleCount(itemsPerPage);
     setSelectedUsers([]);
   };
 
@@ -1014,9 +1015,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
   };
 
   const getCurrentPageUsers = () => {
-    const startIndex = (currentPage - 1) * itemsPerPage;
-    const endIndex = startIndex + itemsPerPage;
-    return filteredUsers.slice(startIndex, endIndex);
+    return filteredUsers.slice(0, visibleCount);
   };
 
   const formatCurrency = (amount) => 
@@ -1103,10 +1102,26 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
     };
   };
 
-  const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
   const currentUsers = getCurrentPageUsers();
   const selectedUserStats = selectedUserActivities.length > 0 ? 
     calculateActivityStats(selectedUserActivities) : null;
+
+  // Infinite scroll: load more users when scrolling near bottom
+  useEffect(() => {
+    const onScroll = () => {
+      try {
+        const nearBottom = (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - 400);
+        if (nearBottom && visibleCount < filteredUsers.length) {
+          setVisibleCount(prev => Math.min(filteredUsers.length, prev + itemsPerPage));
+        }
+      } catch (e) {
+        // ignore in SSR or unusual environments
+      }
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [visibleCount, filteredUsers.length]);
 
   return (
     <div className="min-h-screen bg-gray-50 p-2 sm:p-4">
@@ -1115,12 +1130,24 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
         <div className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl sm:rounded-2xl p-4 sm:p-6 md:p-8 mb-4 sm:mb-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-1 sm:mb-2 flex items-center">
-                <Shield className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3" />
-                <span className="hidden sm:inline">Bảng Điều Khiển Quản Trị Tích Hợp</span>
-                <span className="sm:hidden">Admin Dashboard</span>
-              </h1>
-              <p className="opacity-90 text-sm sm:text-base hidden sm:block">Quản lý người dùng, duyệt đăng ký & theo dõi tracklog</p>
+              {limitedMode ? (
+                <>
+                  <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-1 sm:mb-2 flex items-center">
+                    <Shield className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3" />
+                    <span className="inline">Bảng theo dõi đồng bọn</span>
+                  </h1>
+                  <p className="opacity-90 text-sm sm:text-base">Nơi theo dõi đồng bọn, tìm kiếm cơ hội lập poll</p>
+                </>
+              ) : (
+                <>
+                  <h1 className="text-xl sm:text-2xl md:text-3xl font-bold mb-1 sm:mb-2 flex items-center">
+                    <Shield className="w-6 h-6 sm:w-8 sm:h-8 mr-2 sm:mr-3" />
+                    <span className="hidden sm:inline">Bảng Điều Khiển Quản Trị Tích Hợp</span>
+                    <span className="sm:hidden">Admin Dashboard</span>
+                  </h1>
+                  <p className="opacity-90 text-sm sm:text-base hidden sm:block">Quản lý người dùng, duyệt đăng ký & theo dõi tracklog</p>
+                </>
+              )}
             </div>
             <div className="text-left sm:text-right">
               <div className="text-xl sm:text-2xl font-bold">{stats.total}</div>
@@ -1150,14 +1177,16 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
                     <span className="hidden sm:inline">Dashboard cá nhân</span>
                     <span className="sm:hidden">Dashboard</span>
                   </button>
-                  <button
-                    onClick={() => navigate('/admin')}
-                    className="flex items-center text-white hover:text-gray-200 whitespace-nowrap text-sm sm:text-base"
-                  >
-                    <Settings className="w-4 h-4 mr-1" />
-                    <span className="hidden sm:inline">Cấu hình hệ thống</span>
-                    <span className="sm:hidden">Cấu hình</span>
-                  </button>
+                  {!limitedMode && (
+                    <button
+                      onClick={() => navigate('/admin')}
+                      className="flex items-center text-white hover:text-gray-200 whitespace-nowrap text-sm sm:text-base"
+                    >
+                      <Settings className="w-4 h-4 mr-1" />
+                      <span className="hidden sm:inline">Cấu hình hệ thống</span>
+                      <span className="sm:hidden">Cấu hình</span>
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -1729,60 +1758,7 @@ function AdminIntegratedDashboard({ limitedMode = false }) {
                     ))}
                   </div>
 
-                  {/* Pagination */}
-                  {totalPages > 1 && (
-                    <div className="px-6 py-4 border-t border-gray-200">
-                      <div className="flex items-center justify-between">
-                        <div className="text-sm text-gray-700">
-                          Hiển thị {((currentPage - 1) * itemsPerPage) + 1}-{Math.min(currentPage * itemsPerPage, filteredUsers.length)} của {filteredUsers.length}
-                        </div>
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                            disabled={currentPage === 1}
-                            className={`p-2 rounded-lg ${currentPage === 1 ? 'text-gray-400' : 'text-gray-700 hover:bg-gray-100'}`}
-                          >
-                            <ChevronLeft className="w-5 h-5" />
-                          </button>
-                          
-                          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                            let pageNum;
-                            if (totalPages <= 5) {
-                              pageNum = i + 1;
-                            } else if (currentPage <= 3) {
-                              pageNum = i + 1;
-                            } else if (currentPage >= totalPages - 2) {
-                              pageNum = totalPages - 4 + i;
-                            } else {
-                              pageNum = currentPage - 2 + i;
-                            }
-                            
-                            return (
-                              <button
-                                key={pageNum}
-                                onClick={() => setCurrentPage(pageNum)}
-                                className={`w-10 h-10 rounded-lg ${
-                                  currentPage === pageNum
-                                    ? 'bg-blue-600 text-white'
-                                    : 'text-gray-700 hover:bg-gray-100'
-                                }`}
-                              >
-                                {pageNum}
-                              </button>
-                            );
-                          })}
-                          
-                          <button
-                            onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                            disabled={currentPage === totalPages}
-                            className={`p-2 rounded-lg ${currentPage === totalPages ? 'text-gray-400' : 'text-gray-700 hover:bg-gray-100'}`}
-                          >
-                            <ChevronRight className="w-5 h-5" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  {/* Infinite scroll replaces pagination */}
                 </>
               )}
             </div>
