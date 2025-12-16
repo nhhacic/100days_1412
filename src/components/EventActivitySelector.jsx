@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../services/firebase';
 import { 
   collection, getDocs, addDoc, query, where, serverTimestamp, Timestamp 
@@ -19,6 +19,7 @@ function EventActivitySelector({ user, activities, onClose, onActivityLinked, in
   const [selectedActivity, setSelectedActivity] = useState(null);
   const [expanded, setExpanded] = useState(false); // Mặc định thu gọn
   const [showModal, setShowModal] = useState(false); // Modal để gán activity
+  const canvasRef = useRef(null);
 
   useEffect(() => {
     loadData();
@@ -36,6 +37,123 @@ function EventActivitySelector({ user, activities, onClose, onActivityLinked, in
       }
     }
   }, [initialEventId, events]);
+
+  // Fireworks canvas animation
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let width = canvas.width = canvas.offsetWidth;
+    let height = canvas.height = canvas.offsetHeight;
+
+    const particles = [];
+    const fireworks = [];
+    let raf = null;
+
+    function resize() {
+      width = canvas.width = canvas.offsetWidth;
+      height = canvas.height = canvas.offsetHeight;
+    }
+
+    window.addEventListener('resize', resize);
+
+    function random(min, max) { return Math.random() * (max - min) + min; }
+
+    class Particle {
+      constructor(x, y, vx, vy, color, life) {
+        this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.color = color; this.life = life; this.age = 0; this.alpha = 1;
+      }
+      update(dt) {
+        this.age += dt;
+        this.vy += 0.0025 * dt; // gravity
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+        this.alpha = Math.max(0, 1 - this.age / this.life);
+      }
+      draw(ctx) {
+        ctx.globalAlpha = this.alpha;
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function spawnFirework() {
+      const sx = random(width * 0.2, width * 0.8);
+      const sy = height + 20;
+      const tx = random(width * 0.2, width * 0.8);
+      const ty = random(height * 0.1, height * 0.5);
+      const color = `hsl(${Math.floor(random(0,360))}deg 80% 60%)`;
+      // ascend particle
+      const ascent = new Particle(sx, sy, (tx - sx) / 300, (ty - sy) / 300, color, 1.0);
+      ascent.isRocket = true;
+      fireworks.push(ascent);
+    }
+
+    function explode(x, y, baseColor) {
+      const count = Math.floor(random(18, 36));
+      for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i) / count + random(-0.2, 0.2);
+        const speed = random(0.6, 2.4);
+        const vx = Math.cos(angle) * speed;
+        const vy = Math.sin(angle) * speed;
+        const color = `hsla(${Math.floor(random(0,360))}, 90%, ${random(50,70)}%, 1)`;
+        particles.push(new Particle(x, y, vx, vy, color, random(0.9, 1.8)));
+      }
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = (now - last) / 16.666; // approx frames
+      last = now;
+
+      ctx.clearRect(0, 0, width, height);
+
+      // launch new fireworks occasionally
+      if (Math.random() < 0.03) spawnFirework();
+
+      // update rockets
+      for (let i = fireworks.length - 1; i >= 0; i--) {
+        const f = fireworks[i];
+        f.update(dt);
+        // draw rocket as bright point
+        ctx.fillStyle = f.color;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+        if (f.vy >= 0 || f.y < height * 0.12) {
+          // explode
+          explode(f.x, f.y, f.color);
+          fireworks.splice(i, 1);
+        }
+      }
+
+      // update particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.update(dt);
+        p.draw(ctx);
+        if (p.alpha <= 0) particles.splice(i, 1);
+      }
+
+      // subtle glow
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = 'rgba(255,255,255,0.02)';
+      ctx.fillRect(0,0,width,height);
+      ctx.globalCompositeOperation = 'source-over';
+
+      raf = requestAnimationFrame(loop);
+    }
+
+    raf = requestAnimationFrame(loop);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', resize);
+    };
+  }, [canvasRef]);
 
   const loadData = async () => {
     setLoading(true);
@@ -287,6 +405,7 @@ function EventActivitySelector({ user, activities, onClose, onActivityLinked, in
       {!modalOnly && (
         /* Compact view - mặc định */
         <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg overflow-hidden event-banner-animate event-banner-glow event-banner-fireworks">
+          <canvas ref={canvasRef} className="event-banner-canvas pointer-events-none absolute inset-0 w-full h-full" />
           <button
             onClick={() => setExpanded(!expanded)}
             className="w-full p-3 flex items-center justify-between text-left hover:bg-yellow-100/50 transition"

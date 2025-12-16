@@ -27,7 +27,7 @@ import {
 import NotificationManager from './NotificationManager';
 import SpecialEventsManager from './SpecialEventsManager';
 
-function AdminIntegratedDashboard() {
+function AdminIntegratedDashboard({ limitedMode = false }) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [allUsers, setAllUsers] = useState([]);
@@ -177,8 +177,12 @@ function AdminIntegratedDashboard() {
       let activeCount = 0;
       let totalDeposit = 0;
       let totalPenalty = 0;
+      const totalPenaltyByMonth = {}; // { 'YYYY-MM': number }
       let totalActivities = 0;
       let totalDistance = 0;
+      let totalRunCount = 0;
+      let totalSwimCount = 0;
+      let totalRideCount = 0;
 
       for (const docSnap of querySnapshot.docs) {
         const data = docSnap.data();
@@ -203,12 +207,36 @@ function AdminIntegratedDashboard() {
         
         if (user.isActive) activeCount++;
         if (user.depositPaid) totalDeposit += 500000;
-        totalPenalty += metrics.allMonthsPenalty?.total || 0; // Tổng phạt tất cả tháng
+        // Aggregate per-month penalties (metrics.allMonthsPenalty.months contains per-month data)
+        const m = metrics.allMonthsPenalty;
+        if (m && Array.isArray(m.months)) {
+          for (const mm of m.months) {
+            const key = mm.monthKey || mm.month || '';
+            if (!key) continue;
+            totalPenaltyByMonth[key] = (totalPenaltyByMonth[key] || 0) + (mm.penalty || 0);
+          }
+        }
+        totalPenalty += m?.total || 0; // Tổng phạt tất cả tháng (fallback)
         totalActivities += metrics.activityCount;
         totalDistance += metrics.totalDistance;
+        totalRunCount += metrics.monthRunCount || 0;
+        totalSwimCount += metrics.monthSwimCount || 0;
+        totalRideCount += metrics.monthRideCount || 0;
       }
 
       setAllUsers(userList);
+      // Build penalty months array sorted by monthKey asc
+      const penaltyMonths = Object.keys(totalPenaltyByMonth).sort().map(k => {
+        const parts = k.split('-');
+        let monthName = k;
+        if (parts.length === 2) {
+          const y = parseInt(parts[0], 10);
+          const mIndex = parseInt(parts[1], 10) - 1;
+          monthName = new Date(y, mIndex, 1).toLocaleDateString('vi-VN', { month: 'long', year: 'numeric' });
+        }
+        return { monthKey: k, monthName, penalty: totalPenaltyByMonth[k] };
+      });
+
       setStats({
         total: userList.length,
         pending: pendingCount,
@@ -217,7 +245,11 @@ function AdminIntegratedDashboard() {
         active: activeCount,
         totalDeposit,
         totalPenalty, // Đây giờ là tổng phạt TẤT CẢ các tháng
+        totalPenaltyMonths: penaltyMonths,
         totalActivities,
+        totalRunCount,
+        totalSwimCount,
+        totalRideCount,
         totalDistance: parseFloat(totalDistance.toFixed(1))
       });
 
@@ -252,6 +284,17 @@ function AdminIntegratedDashboard() {
     const monthActivities = userActivities.filter(activity => {
       const activityDate = new Date(activity.start_date);
       return activityDate.getMonth() === currentMonth && activityDate.getFullYear() === currentYear;
+    });
+
+    // Đếm loại hoạt động trong tháng hiện tại (Run/Swim/Ride)
+    let monthRunCount = 0;
+    let monthSwimCount = 0;
+    let monthRideCount = 0;
+    monthActivities.forEach(activity => {
+      const type = (activity.type || activity.sport_type || '').toLowerCase();
+      if (type.includes('run') || type.includes('walk')) monthRunCount++;
+      else if (type.includes('swim')) monthSwimCount++;
+      else if (type.includes('ride') || type.includes('bike')) monthRideCount++;
     });
     
     // Xử lý activities với quota và validation (truyền thêm eventParticipations)
@@ -292,6 +335,9 @@ function AdminIntegratedDashboard() {
       swimDistance: summary.totalSwimCounted,
       totalDistance: parseFloat((summary.totalRunCounted + summary.totalSwimCounted).toFixed(1)),
       activityCount: monthActivities.length,
+      monthRunCount,
+      monthSwimCount,
+      monthRideCount,
       runProgress: summary.runProgress,
       swimProgress: summary.swimProgress,
       penalty: summary.totalPenalty,
@@ -1141,50 +1187,56 @@ function AdminIntegratedDashboard() {
 
         {/* Tabs Navigation */}
         <div className="flex gap-2 sm:space-x-2 mb-4 sm:mb-6 overflow-x-auto pb-2">
-          <button
-            onClick={() => setActiveTab('users')}
-            className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
-              activeTab === 'users'
-                ? 'bg-white text-purple-600 shadow'
-                : 'bg-white/50 text-gray-600 hover:bg-white/80'
-            }`}
-          >
-            <Users className="w-4 h-4 mr-1 sm:mr-2" />
-            <span className="hidden sm:inline">Quản lý người dùng</span>
-            <span className="sm:hidden">Người dùng</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('notifications')}
-            className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
-              activeTab === 'notifications'
-                ? 'bg-white text-purple-600 shadow'
-                : 'bg-white/50 text-gray-600 hover:bg-white/80'
-            }`}
-          >
-            <Bell className="w-4 h-4 mr-1 sm:mr-2" />
-            Thông báo
-          </button>
-          <button
-            onClick={() => setActiveTab('events')}
-            className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
-              activeTab === 'events'
-                ? 'bg-white text-purple-600 shadow'
-                : 'bg-white/50 text-gray-600 hover:bg-white/80'
-            }`}
-          >
-            <Star className="w-4 h-4 mr-1 sm:mr-2" />
-            <span className="hidden sm:inline">Sự kiện đặc biệt</span>
-            <span className="sm:hidden">Sự kiện</span>
-          </button>
+          {!limitedMode && (
+            <button
+              onClick={() => setActiveTab('users')}
+              className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
+                activeTab === 'users'
+                  ? 'bg-white text-purple-600 shadow'
+                  : 'bg-white/50 text-gray-600 hover:bg-white/80'
+              }`}
+            >
+              <Users className="w-4 h-4 mr-1 sm:mr-2" />
+              <span className="hidden sm:inline">Quản lý người dùng</span>
+              <span className="sm:hidden">Người dùng</span>
+            </button>
+          )}
+          {!limitedMode && (
+            <>
+              <button
+                onClick={() => setActiveTab('notifications')}
+                className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
+                  activeTab === 'notifications'
+                    ? 'bg-white text-purple-600 shadow'
+                    : 'bg-white/50 text-gray-600 hover:bg-white/80'
+                }`}
+              >
+                <Bell className="w-4 h-4 mr-1 sm:mr-2" />
+                Thông báo
+              </button>
+              <button
+                onClick={() => setActiveTab('events')}
+                className={`flex items-center px-3 sm:px-4 py-2 rounded-lg font-medium transition whitespace-nowrap text-sm sm:text-base ${
+                  activeTab === 'events'
+                    ? 'bg-white text-purple-600 shadow'
+                    : 'bg-white/50 text-gray-600 hover:bg-white/80'
+                }`}
+              >
+                <Star className="w-4 h-4 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">Sự kiện đặc biệt</span>
+                <span className="sm:hidden">Sự kiện</span>
+              </button>
+            </>
+          )}
         </div>
 
         {/* Notification Manager Tab */}
-        {activeTab === 'notifications' && (
+        {activeTab === 'notifications' && !limitedMode && (
           <NotificationManager currentUser={auth.currentUser} />
         )}
 
         {/* Special Events Tab */}
-        {activeTab === 'events' && (
+        {activeTab === 'events' && !limitedMode && (
           <SpecialEventsManager />
         )}
 
@@ -1192,126 +1244,74 @@ function AdminIntegratedDashboard() {
         {activeTab === 'users' && viewMode === 'list' ? (
           <>
             {/* Stats Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6">
-              <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
-                <div className="flex items-center">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-yellow-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
-                    <Clock className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-600" />
-                  </div>
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold">{stats.pending}</div>
-                    <div className="text-gray-600 text-xs sm:text-sm">Chờ duyệt</div>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
-                <div className="flex items-center">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-green-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
-                    <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" />
-                  </div>
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold">{stats.approved}</div>
-                    <div className="text-gray-600 text-xs sm:text-sm">Đã duyệt</div>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
-                <div className="flex items-center">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-red-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
-                    <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-600" />
-                  </div>
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold">{stats.rejected}</div>
-                    <div className="text-gray-600 text-xs sm:text-sm">Đã từ chối</div>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
-                <div className="flex items-center">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
-                    <Activity className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
-                  </div>
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold">{stats.totalActivities}</div>
-                    <div className="text-gray-600 text-xs sm:text-sm">Hoạt động</div>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Card tổng phạt tất cả tháng */}
-              <div className="bg-white rounded-xl p-3 sm:p-4 shadow col-span-2 sm:col-span-1">
-                <div className="flex items-center">
-                  <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-lg flex items-center justify-center mr-2 sm:mr-4 ${stats.totalPenalty > 0 ? 'bg-red-100' : 'bg-green-100'}`}>
-                    <DollarSign className={`w-5 h-5 sm:w-6 sm:h-6 ${stats.totalPenalty > 0 ? 'text-red-600' : 'text-green-600'}`} />
-                  </div>
-                  <div>
-                    <div className={`text-lg sm:text-xl font-bold ${stats.totalPenalty > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {formatCurrency(stats.totalPenalty)}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4 mb-4 sm:mb-6">
+              {!limitedMode && (
+                <>
+                  <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
+                    <div className="flex items-center">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-indigo-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
+                        <Users className="w-5 h-5 sm:w-6 sm:h-6 text-indigo-600" />
+                      </div>
+                      <div>
+                        <div className="text-xl sm:text-2xl font-bold">{stats.pending + stats.approved + stats.rejected}</div>
+                        <div className="text-gray-600 text-xs sm:text-sm">Tổng trạng thái người dùng</div>
+                        <div className="mt-2 text-sm text-gray-700">
+                          <span className="inline-block mr-3">⏳ Chờ duyệt: <strong>{stats.pending}</strong></span>
+                          <span className="inline-block mr-3">✅ Đã duyệt: <strong>{stats.approved}</strong></span>
+                          <span className="inline-block">❌ Đã từ chối: <strong>{stats.rejected}</strong></span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-gray-600 text-xs sm:text-sm">Tổng phạt (T11+T12)</div>
                   </div>
-                </div>
-              </div>
+
+                  <div className="bg-white rounded-xl p-3 sm:p-4 shadow">
+                    <div className="flex items-center">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
+                        <Activity className="w-5 h-5 sm:w-6 sm:h-6 text-blue-600" />
+                      </div>
+                      <div>
+                        <div className="text-xl sm:text-2xl font-bold">{stats.totalActivities}</div>
+                        <div className="text-gray-600 text-xs sm:text-sm">Hoạt động</div>
+                        <div className="mt-2 text-sm text-gray-700">
+                          <span className="inline-block mr-3">🏊 Bơi: <strong>{stats.totalSwimCount || 0}</strong></span>
+                          <span className="inline-block mr-3">🚴 Đạp: <strong>{stats.totalRideCount || 0}</strong></span>
+                          <span className="inline-block">🏃 Chạy: <strong>{stats.totalRunCount || 0}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card tổng phạt: season total + breakdown per month */}
+                  <div className="bg-white rounded-xl p-3 sm:p-4 shadow col-span-1">
+                    <div className="flex items-start">
+                      <div className="w-10 h-10 sm:w-12 sm:h-12 bg-red-100 rounded-lg flex items-center justify-center mr-2 sm:mr-4">
+                        <DollarSign className="w-5 h-5 sm:w-6 sm:h-6 text-red-600" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-lg sm:text-2xl font-bold text-red-600">{formatCurrency(stats.totalPenalty || 0)}</div>
+                        <div className="text-gray-600 text-xs sm:text-sm">Tổng phạt mùa giải</div>
+                        <div className="mt-3 text-sm text-gray-700">
+                          {stats.totalPenaltyMonths && stats.totalPenaltyMonths.length > 0 ? (
+                            <ul className="space-y-2">
+                              {stats.totalPenaltyMonths.map(pm => (
+                                <li key={pm.monthKey} className="flex items-center justify-between">
+                                  <span className="text-sm text-gray-600">{pm.monthName}</span>
+                                  <span className={`font-medium ${pm.penalty > 0 ? 'text-red-600' : 'text-green-600'}`}>{formatCurrency(pm.penalty)}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <div className="text-sm text-gray-500">Không có dữ liệu phạt theo tháng</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
             
-            {/* Bulk Actions */}
-            {filteredUsers.some(u => u.status === 'pending_approval') && (
-              <div className="bg-white rounded-xl shadow p-4 mb-6">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <button
-                      onClick={toggleSelectAll}
-                      className="flex items-center text-gray-700 hover:text-gray-900"
-                    >
-                      {selectedUsers.length === currentUsers.length ? 
-                        <CheckSquare className="w-5 h-5 text-blue-600" /> : 
-                        <Square className="w-5 h-5 text-gray-400" />
-                      }
-                      <span className="ml-2">Chọn tất cả</span>
-                    </button>
-                    <span className="text-gray-600">
-                      Đã chọn {selectedUsers.length} người dùng
-                    </span>
-                  </div>
-                  
-                  <div className="space-x-3">
-                    <button
-                      onClick={handleBulkApprove}
-                      disabled={selectedUsers.length === 0}
-                      className={`px-4 py-2 rounded-lg font-medium flex items-center ${
-                        selectedUsers.length > 0
-                          ? 'bg-green-600 text-white hover:bg-green-700'
-                          : 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                      }`}
-                    >
-                      <CheckCircle className="w-4 h-4 mr-2" />
-                      Duyệt đã chọn
-                    </button>
-                    <button
-                      onClick={handleBulkDelete}
-                      disabled={selectedUsers.length === 0}
-                      className={`px-4 py-2 rounded-lg font-medium flex items-center ${
-                        selectedUsers.length > 0
-                          ? 'bg-red-600 text-white hover:bg-red-700'
-                          : 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                      }`}
-                    >
-                      <Trash2 className="w-4 h-4 mr-2" />
-                      Xóa đã chọn
-                    </button>
-                    <button
-                      onClick={() => setSelectedUsers([])}
-                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300"
-                    >
-                      Bỏ chọn
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            
 
             {/* Filters and Search */}
             <div className="bg-white rounded-xl shadow p-4 mb-6">
@@ -1383,27 +1383,6 @@ function AdminIntegratedDashboard() {
                       💰 Có tiền phạt
                     </button>
                     
-                    <button
-                      onClick={() => setAdvancedFilter(advancedFilter === 'no_strava' ? 'none' : 'no_strava')}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
-                        advancedFilter === 'no_strava' 
-                          ? 'bg-orange-100 text-orange-700 border-2 border-orange-400' 
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      🔗 Chưa Strava
-                    </button>
-                    
-                    <button
-                      onClick={() => setAdvancedFilter(advancedFilter === 'approved_no_strava' ? 'none' : 'approved_no_strava')}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
-                        advancedFilter === 'approved_no_strava' 
-                          ? 'bg-yellow-100 text-yellow-700 border-2 border-yellow-400' 
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      ⚠️ Duyệt, chưa Strava
-                    </button>
                     
                     <button
                       onClick={() => setAdvancedFilter(advancedFilter === 'no_deposit' ? 'none' : 'no_deposit')}
@@ -1449,27 +1428,7 @@ function AdminIntegratedDashboard() {
                       📭 Chưa HĐ tháng này
                     </button>
                     
-                    <button
-                      onClick={() => setAdvancedFilter(advancedFilter === 'new_this_week' ? 'none' : 'new_this_week')}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
-                        advancedFilter === 'new_this_week' 
-                          ? 'bg-green-100 text-green-700 border-2 border-green-400' 
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      🆕 Mới tuần này
-                    </button>
-                    
-                    <button
-                      onClick={() => setAdvancedFilter(advancedFilter === 'new_this_month' ? 'none' : 'new_this_month')}
-                      className={`px-3 py-2 rounded-lg text-sm font-medium transition ${
-                        advancedFilter === 'new_this_month' 
-                          ? 'bg-blue-100 text-blue-700 border-2 border-blue-400' 
-                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    >
-                      🆕 Mới tháng này
-                    </button>
+                    {/* removed: Chưa Strava, Duyệt chưa Strava, Mới tuần này, Mới tháng này */}
                   </div>
                   
                   {/* Custom thresholds */}
@@ -1732,40 +1691,44 @@ function AdminIntegratedDashboard() {
                             Chi tiết
                           </button>
                           
-                          <button
-                            onClick={() => handleEditUser(user)}
-                            className="px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg text-sm font-medium hover:bg-yellow-200 flex items-center justify-center"
-                          >
-                            <Edit className="w-4 h-4 mr-1" />
-                            Sửa
-                          </button>
-                          
-                          {user.status === 'pending_approval' && (
+                          { !limitedMode && (
                             <>
                               <button
-                                onClick={() => handleApprove(user.id)}
-                                className="px-3 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium hover:bg-green-200 flex items-center justify-center"
+                                onClick={() => handleEditUser(user)}
+                                className="px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg text-sm font-medium hover:bg-yellow-200 flex items-center justify-center"
                               >
-                                <CheckCircle className="w-4 h-4 mr-1" />
-                                Duyệt
+                                <Edit className="w-4 h-4 mr-1" />
+                                Sửa
                               </button>
+
+                              {user.status === 'pending_approval' && (
+                                <>
+                                  <button
+                                    onClick={() => handleApprove(user.id)}
+                                    className="px-3 py-2 bg-green-100 text-green-700 rounded-lg text-sm font-medium hover:bg-green-200 flex items-center justify-center"
+                                  >
+                                    <CheckCircle className="w-4 h-4 mr-1" />
+                                    Duyệt
+                                  </button>
+                                  <button
+                                    onClick={() => handleReject(user.id)}
+                                    className="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200 flex items-center justify-center"
+                                  >
+                                    <XCircle className="w-4 h-4 mr-1" />
+                                    Từ chối
+                                  </button>
+                                </>
+                              )}
+
                               <button
-                                onClick={() => handleReject(user.id)}
+                                onClick={() => handleDeleteUser(user.id, user.fullName || user.email)}
                                 className="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200 flex items-center justify-center"
                               >
-                                <XCircle className="w-4 h-4 mr-1" />
-                                Từ chối
+                                <Trash2 className="w-4 h-4 mr-1" />
+                                Xóa
                               </button>
                             </>
                           )}
-                          
-                          <button
-                            onClick={() => handleDeleteUser(user.id, user.fullName || user.email)}
-                            className="px-3 py-2 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200 flex items-center justify-center"
-                          >
-                            <Trash2 className="w-4 h-4 mr-1" />
-                            Xóa
-                          </button>
                         </div>
                       </div>
                     ))}

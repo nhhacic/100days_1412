@@ -48,10 +48,11 @@ class NotificationService {
       
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
-        
         // Skip các thông báo đã bị xóa
         if (!data.isActive) return;
-        
+        // Skip nếu user đã ẩn nó
+        if (data.hiddenBy?.includes && data.hiddenBy.includes(userId)) return;
+
         // Thông báo cho tất cả
         if (data.type === 'all') {
           notifications.push({
@@ -79,6 +80,33 @@ class NotificationService {
     } catch (error) {
       console.error('Error getting notifications:', error);
       return [];
+    }
+  }
+
+  // Ẩn (hide) tất cả thông báo cho một user (không xóa toàn cục)
+  async hideAllForUser(userId) {
+    try {
+      const q = query(
+        collection(db, this.collectionName),
+        where('isActive', '==', true)
+      );
+      const snapshot = await getDocs(q);
+      const updates = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        // only affect notifications that would be visible to this user
+        const visible = (data.type === 'all') ||
+          ((data.type === 'individual' || data.type === 'group') && data.targetUserIds?.includes(userId));
+        if (visible && !(data.hiddenBy?.includes && data.hiddenBy.includes(userId))) {
+          const ref = doc(db, this.collectionName, docSnap.id);
+          updates.push(updateDoc(ref, { hiddenBy: arrayUnion(userId) }));
+        }
+      });
+      await Promise.all(updates);
+      return { success: true, count: updates.length };
+    } catch (error) {
+      console.error('Error hiding all notifications for user:', error);
+      return { success: false, error: error.message };
     }
   }
 
@@ -160,6 +188,27 @@ class NotificationService {
       return { success: true };
     } catch (error) {
       console.error('Error deleting notification:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Xóa tất cả thông báo (soft delete) - cho admin
+  async deleteAllNotifications() {
+    try {
+      const q = query(
+        collection(db, this.collectionName),
+        where('isActive', '==', true)
+      );
+      const snapshot = await getDocs(q);
+      const updates = [];
+      snapshot.forEach(docSnap => {
+        const ref = doc(db, this.collectionName, docSnap.id);
+        updates.push(updateDoc(ref, { isActive: false }));
+      });
+      await Promise.all(updates);
+      return { success: true, count: updates.length };
+    } catch (error) {
+      console.error('Error deleting all notifications:', error);
       return { success: false, error: error.message };
     }
   }

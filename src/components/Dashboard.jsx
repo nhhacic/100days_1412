@@ -465,6 +465,15 @@ function Dashboard({ user }) {
                 <Home className="w-4 h-4 mr-1" />
                 <span className="hidden sm:inline">Luật chơi</span>
               </a>
+              {!isAdmin && (
+                <a
+                  href="#/user-admin-dashboard"
+                  className="flex items-center bg-indigo-500 hover:bg-indigo-600 px-3 py-1.5 rounded-lg text-sm font-medium transition"
+                >
+                  <User className="w-4 h-4 mr-1" />
+                  <span className="hidden sm:inline">Giao diện Admin</span>
+                </a>
+              )}
               {isAdmin && (
                 <a 
                   href="#/admin-dashboard" 

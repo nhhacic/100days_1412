@@ -9,7 +9,9 @@ import Register from './components/Register';
 import Login from './components/Login';
 import Dashboard from './components/Dashboard';
 import AdminIntegratedDashboard from './components/AdminIntegratedDashboard';
+import UserAdminDashboard from './components/UserAdminDashboard';
 import AdminConfig from './components/AdminConfig';
+import PublicPlayers from './components/PublicPlayers';
 import StravaCallback from './components/StravaCallback';
 import TestFirebase from './components/TestFirebase';
 import InstallPrompt from './components/InstallPrompt';
@@ -73,6 +75,11 @@ function App() {
           <Route path="/admin-dashboard" element={
             user ? <AdminIntegratedDashboard /> : <Login />
           } />
+
+          {/* User-facing copy of admin dashboard */}
+          <Route path="/user-admin-dashboard" element={
+            user ? <UserAdminDashboard /> : <Login />
+          } />
           
           {/* Admin Configuration (separate) */}
           <Route path="/admin" element={
@@ -81,6 +88,8 @@ function App() {
           
           {/* Strava Callback */}
           <Route path="/auth/callback" element={<StravaCallback />} />
+          {/* Public players (read-only) */}
+          <Route path="/players" element={<PublicPlayers />} />
         </Routes>
         
         {/* PWA Install Prompt */}

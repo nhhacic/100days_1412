@@ -128,6 +128,29 @@ function NotificationBell({ userId }) {
                     Đọc tất cả
                   </button>
                 )}
+                {notifications.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (!userId) return;
+                      if (!window.confirm('Bạn có chắc muốn xoá/ẩn tất cả thông báo cho bạn? Thao tác này sẽ ẩn chúng trên giao diện của bạn.')) return;
+                      try {
+                        const res = await notificationService.hideAllForUser(userId);
+                        if (res.success) {
+                          loadNotifications();
+                        } else {
+                          alert('Lỗi: ' + res.error);
+                        }
+                      } catch (err) {
+                        alert('Lỗi khi xoá tất cả: ' + err.message);
+                      }
+                    }}
+                    className="text-xs bg-white/20 hover:bg-red-50 hover:text-red-600 px-2 py-1 rounded flex items-center"
+                    title="Xóa tất cả thông báo"
+                  >
+                    <Trash2 className="w-4 h-4 mr-1" />
+                    Xóa tất cả
+                  </button>
+                )}
                 <button
                   onClick={() => setIsOpen(false)}
                   className="hover:bg-white/20 p-1 rounded"

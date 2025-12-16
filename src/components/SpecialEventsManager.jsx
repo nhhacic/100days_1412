@@ -492,7 +492,7 @@ function SpecialEventsManager() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-8">
+      <div className="flex items-center justify-center p-8 text-gray-700 dark:text-gray-200">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
         <span className="ml-3">Đang tải...</span>
       </div>
@@ -523,13 +523,13 @@ function SpecialEventsManager() {
 
       {/* Messages */}
       {error && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center text-red-700">
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center text-red-700 dark:bg-red-900 dark:text-red-200 dark:border-red-800">
           <AlertCircle className="w-5 h-5 mr-2" />
           {error}
         </div>
       )}
       {success && (
-        <div className="p-3 bg-green-50 border border-green-200 rounded-lg flex items-center text-green-700">
+        <div className="p-3 bg-green-50 border border-green-200 rounded-lg flex items-center text-green-700 dark:bg-green-900 dark:text-green-200 dark:border-green-800">
           <CheckCircle className="w-5 h-5 mr-2" />
           {success}
         </div>
@@ -537,7 +537,7 @@ function SpecialEventsManager() {
 
       {/* Form */}
       {showForm && (
-        <div className="bg-white rounded-xl shadow-lg p-6">
+        <div className="bg-white rounded-xl shadow-lg p-6 dark:bg-slate-800 dark:text-gray-200">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-bold">
               {editingEvent ? 'Sửa sự kiện' : 'Thêm sự kiện mới'}
@@ -553,11 +553,11 @@ function SpecialEventsManager() {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Tên sự kiện *
               </label>
-              <input
+                <input
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500"
+                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 bg-white dark:bg-slate-900 dark:text-gray-200"
                 placeholder="VD: Dead Fish 2025, Ngày Quốc khánh 2/9..."
               />
             </div>
@@ -732,7 +732,7 @@ function SpecialEventsManager() {
       )}
 
       {/* Default Annual Events */}
-      <div className="bg-white rounded-xl shadow overflow-hidden">
+      <div className="bg-white rounded-xl shadow overflow-hidden dark:bg-slate-800 dark:text-gray-200">
         <button
           onClick={() => setShowDefaultEvents(!showDefaultEvents)}
           className="w-full p-4 border-b bg-gradient-to-r from-amber-50 to-orange-50 flex items-center justify-between hover:from-amber-100 hover:to-orange-100 transition"
@@ -775,13 +775,13 @@ function SpecialEventsManager() {
               return (
                 <div 
                   key={eventKey} 
-                  className={`p-4 ${!isEnabled ? 'bg-gray-50 opacity-60' : ''}`}
+                  className={`p-4 ${!isEnabled ? 'bg-gray-50 opacity-60' : ''} dark:bg-transparent`}
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <div className="flex items-center flex-wrap gap-2 mb-1">
                         <span className="text-xl">{evt.emoji}</span>
-                        <span className="font-medium text-gray-900">{evt.name}</span>
+                        <span className="font-medium text-gray-900 dark:text-gray-200">{evt.name}</span>
                         <span className={`px-2 py-0.5 rounded-full text-xs ${
                           isEnabled 
                             ? 'bg-green-100 text-green-700' 

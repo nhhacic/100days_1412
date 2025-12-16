@@ -187,6 +187,28 @@ function NotificationManager({ currentUser }) {
           >
             <RefreshCw className="w-5 h-5" />
           </button>
+          {notifications.length > 0 && (
+            <button
+              onClick={async () => {
+                if (!window.confirm('Bạn có chắc muốn xóa tất cả thông báo? Hành động này sẽ thu hồi mọi thông báo (soft-delete).')) return;
+                try {
+                  const res = await notificationService.deleteAllNotifications();
+                  if (res.success) {
+                    alert('Đã xóa ' + (res.count || 0) + ' thông báo');
+                    loadNotifications();
+                  } else {
+                    alert('Lỗi khi xóa tất cả: ' + res.error);
+                  }
+                } catch (err) {
+                  alert('Lỗi khi xóa tất cả: ' + err.message);
+                }
+              }}
+              className="p-2 text-gray-600 hover:bg-red-50 hover:text-red-600 rounded-lg"
+              title="Xóa tất cả thông báo"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+          )}
           <button
             onClick={() => setShowCreateModal(true)}
             className="flex items-center px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 transition-all shadow-lg"
