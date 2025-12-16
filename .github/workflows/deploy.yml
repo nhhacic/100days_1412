@@ -1,0 +1,71 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: pnpm/action-setup@v2
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-build
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: site-build
+
+      - name: Copy build to server (SCP)
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.DEPLOY_SERVER_HOST }}
+          username: ${{ secrets.DEPLOY_SERVER_USER }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.DEPLOY_SERVER_PORT || '22' }}
+          source: "dist/*"
+          target: ${{ secrets.DEPLOY_TARGET_PATH }}
+
+      - name: Run remote post-deploy commands
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_SERVER_HOST }}
+          username: ${{ secrets.DEPLOY_SERVER_USER }}
+          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.DEPLOY_SERVER_PORT || '22' }}
+          script: |
+            set -e
+            # optional: install server-side dependencies or adjust permissions
+            echo "Files copied to '${{ secrets.DEPLOY_TARGET_PATH }}'"
+            # If you use a process manager (pm2/systemd), restart the site service here
+            # Example (pm2):
+            # cd ${{ secrets.DEPLOY_TARGET_PATH }} && pm2 reload ecosystem.config.js || pm2 start npm --name app -- start
+            # Example (nginx): touch /tmp/reload-nginx; sudo systemctl reload nginx || true
+
+  # Note: configure the following repository secrets in GitHub:
+  # - DEPLOY_SERVER_HOST
+  # - DEPLOY_SERVER_USER
+  # - DEPLOY_SERVER_PORT (optional)
+  # - DEPLOY_SSH_PRIVATE_KEY
+  # - DEPLOY_TARGET_PATH
